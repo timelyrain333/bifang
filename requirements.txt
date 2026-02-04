@@ -1,0 +1,22 @@
+Django==4.2.7
+djangorestframework==3.14.0
+django-cors-headers==4.3.1
+celery==5.3.4
+redis==5.0.1
+mysqlclient==2.2.0
+aliyun-python-sdk-core>=2.14.0
+aliyun-python-sdk-sas>=1.0.0
+python-dateutil==2.8.2
+openpyxl==3.1.2
+requests==2.31.0
+beautifulsoup4==4.12.2
+lxml==5.1.0
+# CNVD 采集：尝试绕过 521（JS 挑战），需配合 collect_cnvd_list 插件使用
+cloudscraper>=1.2.71
+# CNVD 521 仍失败时可选：pip install playwright && playwright install chromium
+playwright>=1.40.0
+openai>=1.0.0
+lark-oapi>=1.5.0
+python-socks>=2.0.0
+dingtalk-stream>=0.24.0
+boto3>=1.28.0

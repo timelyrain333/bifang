@@ -1,0 +1,25 @@
+# HexStrike AI 服务 - Docker Compose
+# 用于 bifang 资产安全评估，便于迁移与整体部署
+# 启动: docker-compose -f docker-compose.hexstrike.yml up -d
+# 停止: docker-compose -f docker-compose.hexstrike.yml down
+# 仅需 HexStrike 时: docker-compose -f docker-compose.hexstrike.yml up -d hexstrike-ai
+
+services:
+  hexstrike-ai:
+    build:
+      context: docker/hexstrike-ai
+      dockerfile: Dockerfile
+    image: bifang/hexstrike-ai:latest
+    container_name: hexstrike-ai
+    ports:
+      - "8888:8888"
+    environment:
+      - HEXSTRIKE_HOST=0.0.0.0
+      - HEXSTRIKE_PORT=8888
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8888/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

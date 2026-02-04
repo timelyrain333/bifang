@@ -1,0 +1,141 @@
+# Bifang 全量 Docker 部署：前端(8080)、后端(8000)、Redis、Celery、钉钉 Stream、HexStrike
+# 启动: docker compose up -d --build
+# 停止: docker compose down
+# 前端: http://localhost:8080  后端 API: http://localhost:8000
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: bifang-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bifang/backend:latest
+    container_name: bifang-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - HEXSTRIKE_SERVER_URL=http://hexstrike-ai:8888
+      - HEXSTRIKE_ENABLED=true
+      - DATABASE_PATH=/app/data/db.sqlite3
+      - RUN_MIGRATE=1
+    volumes:
+      - bifang_data:/app/data
+      - bifang_logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    entrypoint: ["/app/docker/entrypoint.sh"]
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    image: bifang/frontend:latest
+    container_name: bifang-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  celery-worker:
+    image: bifang/backend:latest
+    container_name: bifang-celery-worker
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - HEXSTRIKE_SERVER_URL=http://hexstrike-ai:8888
+      - DATABASE_PATH=/app/data/db.sqlite3
+      - RUN_MIGRATE=0
+    volumes:
+      - bifang_data:/app/data
+      - bifang_logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    entrypoint: ["/app/docker/entrypoint.sh"]
+    command: ["celery", "-A", "app.celery_app", "worker", "-l", "info"]
+    restart: unless-stopped
+
+  celery-beat:
+    image: bifang/backend:latest
+    container_name: bifang-celery-beat
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_PATH=/app/data/db.sqlite3
+      - RUN_MIGRATE=0
+    volumes:
+      - bifang_data:/app/data
+      - bifang_logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    entrypoint: ["/app/docker/entrypoint.sh"]
+    command: ["celery", "-A", "app.celery_app", "beat", "-l", "info"]
+    restart: unless-stopped
+
+  dingtalk-stream:
+    image: bifang/backend:latest
+    container_name: bifang-dingtalk-stream
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - HEXSTRIKE_SERVER_URL=http://hexstrike-ai:8888
+      - DATABASE_PATH=/app/data/db.sqlite3
+      - RUN_MIGRATE=0
+    volumes:
+      - bifang_data:/app/data
+      - bifang_logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    entrypoint: ["/app/docker/entrypoint.sh"]
+    command: ["python", "manage.py", "start_dingtalk_stream"]
+    restart: unless-stopped
+
+  hexstrike-ai:
+    build:
+      context: docker/hexstrike-ai
+      dockerfile: Dockerfile
+    image: bifang/hexstrike-ai:latest
+    container_name: bifang-hexstrike-ai
+    ports:
+      - "8888:8888"
+    environment:
+      - HEXSTRIKE_HOST=0.0.0.0
+      - HEXSTRIKE_PORT=8888
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8888/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  redis_data:
+  bifang_data:
+  bifang_logs:

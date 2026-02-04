@@ -1,0 +1,21 @@
+# 前端独立服务：构建 Vue + Nginx 提供静态并代理 /api 到后端
+# 阶段1: 构建 Vue（publicPath=/ 供 Nginx 根路径部署）
+FROM node:18-slim AS frontend-builder
+WORKDIR /app/frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend ./
+
+ENV NODE_ENV=production
+ENV VUE_CLI_BUILD_OUTPUT_DIR=dist
+# Nginx 根路径部署，静态资源用 /
+ENV VUE_APP_PUBLIC_PATH=/
+RUN npm run build
+
+# 阶段2: Nginx 提供静态并反向代理 /api（国内可改用 docker.1ms.run/library/nginx:alpine）
+FROM docker.1ms.run/library/nginx:alpine
+COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html
+COPY docker/nginx-frontend.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

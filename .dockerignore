@@ -1,0 +1,54 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.venv
+venv
+env
+ENV
+*.egg-info
+*.egg
+
+# Django / 本地数据（容器内用卷重新挂载）
+db.sqlite3
+db.sqlite3-journal
+staticfiles
+logs
+*.log
+celerybeat-schedule
+celerybeat.pid
+*.pid
+
+# 前端（构建阶段会单独 COPY，避免把 node_modules 带进上下文）
+frontend/node_modules
+frontend/dist
+project
+
+# 文档与杂项（不参与构建）
+*.md
+!README.md
+doc
+docs
+scripts
+*.sh
+stop.sh
+start.sh
+start_celery.sh
+check_*.py
+test_*.js
+docker-compose.hexstrike.yml
+
+# IDE / OS
+.idea
+.vscode
+.DS_Store
+*.swp
+*.swo
+
+# HexStrike 本地目录（镜像内从 GitHub 克隆）
+hexstrike-ai
