@@ -21,3 +21,4 @@ python-socks>=2.0.0
 dingtalk-stream>=0.24.0
 boto3>=1.28.0
 weasyprint>=60.0
+reportlab>=4.0
