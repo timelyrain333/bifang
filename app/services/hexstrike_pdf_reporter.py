@@ -66,6 +66,42 @@ class HexStrikePDFReporter:
             filename = f"hexstrike_report_{target.replace('.', '_').replace(':', '_')}_{timestamp}.pdf"
             filepath = self.reports_dir / filename
 
+            # 注册中文字体
+            chinese_font = 'Helvetica'  # 默认字体
+            try:
+                # 尝试注册系统自带的冬青黑体（使用 .ttc 的简化路径）
+                font_path = '/System/Library/Fonts/Hiragino Sans GB.ttc'
+                if os.path.exists(font_path):
+                    # 对于 TTC 文件，我们使用子字体索引 1（简体中文）
+                    from reportlab.pdfbase.ttfonts import TTFError
+                    try:
+                        # 注册为简体中文字体
+                        pdfmetrics.registerFont(TTFont('ChineseFont', font_path, subfontIndex=1))
+                        chinese_font = 'ChineseFont'
+                        logger.info(f"成功注册中文字体: Hiragino Sans GB (subfontIndex=1)")
+                    except TTFError:
+                        # 如果失败尝试其他索引
+                        try:
+                            pdfmetrics.registerFont(TTFont('ChineseFont', font_path, subfontIndex=0))
+                            chinese_font = 'ChineseFont'
+                            logger.info(f"成功注册中文字体: Hiragino Sans GB (subfontIndex=0)")
+                        except:
+                            logger.warning("Hiragino Sans GB 注册失败，尝试其他字体")
+            except Exception as e:
+                logger.warning(f"字体注册异常: {e}")
+
+            # 如果主字体失败，尝试备用字体
+            if chinese_font == 'Helvetica':
+                try:
+                    # 尝试 STHeiti（黑体-简）
+                    stheiti_path = '/System/Library/Fonts/STHeiti Light.ttc'
+                    if os.path.exists(stheiti_path):
+                        pdfmetrics.registerFont(TTFont('ChineseFont', stheiti_path, subfontIndex=0))
+                        chinese_font = 'ChineseFont'
+                        logger.info("成功注册中文字体: STHeiti Light")
+                except:
+                    pass
+
             # 创建 PDF 文档
             doc = SimpleDocTemplate(
                 str(filepath),
@@ -88,7 +124,7 @@ class HexStrikePDFReporter:
                 textColor=colors.HexColor('#667eea'),
                 spaceAfter=30,
                 alignment=TA_CENTER,
-                fontName='Helvetica-Bold'
+                fontName=chinese_font
             )
 
             heading_style = ParagraphStyle(
@@ -98,12 +134,15 @@ class HexStrikePDFReporter:
                 textColor=colors.HexColor('#667eea'),
                 spaceAfter=12,
                 spaceBefore=20,
-                fontName='Helvetica-Bold'
+                fontName=chinese_font
             )
 
-            normal_style = styles['BodyText']
-            normal_style.fontName = 'Helvetica'
-            normal_style.fontSize = 10
+            normal_style = ParagraphStyle(
+                'BodyText',
+                parent=styles['BodyText'],
+                fontName=chinese_font,
+                fontSize=10
+            )
 
             # 标题
             story.append(Paragraph("安全评估报告", title_style))
@@ -129,7 +168,7 @@ class HexStrikePDFReporter:
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTNAME', (0, 0), (-1, -1), chinese_font),
                 ('FONTSIZE', (0, 0), (-1, 0), 12),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
                 ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
@@ -141,18 +180,18 @@ class HexStrikePDFReporter:
 
             # 漏洞列表
             if nuclei_results and nuclei_results.get('success'):
-                vuln_section = self._generate_vulnerabilities_section(nuclei_results, styles)
+                vuln_section = self._generate_vulnerabilities_section(nuclei_results, styles, chinese_font)
                 if vuln_section:
                     story.extend(vuln_section)
 
             # 端口列表
             if nmap_results and nmap_results.get('success'):
-                port_section = self._generate_ports_section(nmap_results, styles)
+                port_section = self._generate_ports_section(nmap_results, styles, chinese_font)
                 if port_section:
                     story.extend(port_section)
 
             # 安全建议
-            recommendations = self._generate_recommendations_section(nmap_results, nuclei_results, styles)
+            recommendations = self._generate_recommendations_section(nmap_results, nuclei_results, styles, chinese_font)
             if recommendations:
                 story.extend(recommendations)
 
@@ -217,13 +256,14 @@ class HexStrikePDFReporter:
 
         return stats
 
-    def _generate_vulnerabilities_section(self, nuclei_results: Optional[Dict], styles) -> list:
+    def _generate_vulnerabilities_section(self, nuclei_results: Optional[Dict], styles, chinese_font: str) -> list:
         """生成漏洞列表部分"""
         try:
             import json
             from reportlab.platypus import Paragraph, Spacer, KeepTogether
             from reportlab.lib.enums import TA_LEFT
             from reportlab.lib import colors
+            from reportlab.lib.styles import ParagraphStyle
 
             stdout = nuclei_results.get('stdout', '')
             if not stdout:
@@ -240,7 +280,17 @@ class HexStrikePDFReporter:
                     pass
 
             if not vulnerabilities:
-                return [Paragraph("未发现漏洞", styles['Heading2']), Spacer(1, 0.2*inch)]
+                heading_style = ParagraphStyle(
+                    'CustomHeading2',
+                    parent=styles['Heading2'],
+                    fontName=chinese_font
+                )
+                body_style = ParagraphStyle(
+                    'CustomBody',
+                    parent=styles['BodyText'],
+                    fontName=chinese_font
+                )
+                return [Paragraph("未发现漏洞", heading_style), Spacer(1, 0.2*inch)]
 
             # 按严重性分组
             by_severity = {'critical': [], 'high': [], 'medium': [], 'low': [], 'info': []}
@@ -251,7 +301,23 @@ class HexStrikePDFReporter:
                 by_severity[severity].append(vuln)
 
             story = []
-            story.append(Paragraph("漏洞扫描结果", styles['Heading2']))
+            heading2_style = ParagraphStyle(
+                'CustomHeading2',
+                parent=styles['Heading2'],
+                fontName=chinese_font
+            )
+            heading3_style = ParagraphStyle(
+                'CustomHeading3',
+                parent=styles['Heading3'],
+                fontName=chinese_font
+            )
+            body_style = ParagraphStyle(
+                'CustomBody',
+                parent=styles['BodyText'],
+                fontName=chinese_font
+            )
+
+            story.append(Paragraph("漏洞扫描结果", heading2_style))
 
             severity_labels = {
                 'critical': ('严重', colors.red),
@@ -267,7 +333,7 @@ class HexStrikePDFReporter:
                     continue
 
                 label, color = severity_labels[severity]
-                story.append(Paragraph(f"{label.upper()} ({len(vulns)})", styles['Heading3']))
+                story.append(Paragraph(f"{label.upper()} ({len(vulns)})", heading3_style))
 
                 for vuln in vulns[:20]:  # 最多显示 20 个
                     info = vuln.get('info', {})
@@ -278,11 +344,11 @@ class HexStrikePDFReporter:
                     if description:
                         vuln_text += f"<br/>{description}..."
 
-                    story.append(Paragraph(vuln_text, styles['BodyText']))
+                    story.append(Paragraph(vuln_text, body_style))
                     story.append(Spacer(1, 0.1*inch))
 
                 if len(vulns) > 20:
-                    story.append(Paragraph(f"还有 {len(vulns) - 20} 个{label}漏洞未显示", styles['BodyText']))
+                    story.append(Paragraph(f"还有 {len(vulns) - 20} 个{label}漏洞未显示", body_style))
 
                 story.append(Spacer(1, 0.2*inch))
 
@@ -292,12 +358,13 @@ class HexStrikePDFReporter:
             logger.warning(f"生成漏洞部分失败: {e}")
             return []
 
-    def _generate_ports_section(self, nmap_results: Optional[Dict], styles) -> list:
+    def _generate_ports_section(self, nmap_results: Optional[Dict], styles, chinese_font: str) -> list:
         """生成端口列表部分"""
         try:
             import re
             from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
             from reportlab.lib import colors
+            from reportlab.lib.styles import ParagraphStyle
 
             stdout = nmap_results.get('stdout', '')
             if not stdout:
@@ -319,10 +386,25 @@ class HexStrikePDFReporter:
                 })
 
             if not ports:
-                return [Paragraph("端口扫描结果", styles['Heading2']), Spacer(1, 0.2*inch)]
+                heading_style = ParagraphStyle(
+                    'CustomHeading2',
+                    parent=styles['Heading2'],
+                    fontName=chinese_font
+                )
+                body_style = ParagraphStyle(
+                    'CustomBody',
+                    parent=styles['BodyText'],
+                    fontName=chinese_font
+                )
+                return [Paragraph("端口扫描结果", heading_style), Spacer(1, 0.2*inch), Paragraph("未发现开放端口。", body_style), Spacer(1, 0.2*inch)]
 
             story = []
-            story.append(Paragraph("端口扫描结果", styles['Heading2']))
+            heading_style = ParagraphStyle(
+                'CustomHeading2',
+                parent=styles['Heading2'],
+                fontName=chinese_font
+            )
+            story.append(Paragraph("端口扫描结果", heading_style))
 
             # 创建端口表格
             port_data = [['端口', '服务', '版本']]
@@ -338,7 +420,7 @@ class HexStrikePDFReporter:
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTNAME', (0, 0), (-1, -1), chinese_font),
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
@@ -354,10 +436,11 @@ class HexStrikePDFReporter:
             logger.warning(f"生成端口部分失败: {e}")
             return []
 
-    def _generate_recommendations_section(self, nmap_results: Optional[Dict], nuclei_results: Optional[Dict], styles) -> list:
+    def _generate_recommendations_section(self, nmap_results: Optional[Dict], nuclei_results: Optional[Dict], styles, chinese_font: str) -> list:
         """生成修复建议部分"""
         try:
             from reportlab.platypus import Paragraph, Spacer
+            from reportlab.lib.styles import ParagraphStyle
 
             recommendations = []
 
@@ -404,13 +487,29 @@ class HexStrikePDFReporter:
             if not recommendations:
                 return []
 
+            heading_style = ParagraphStyle(
+                'CustomHeading2',
+                parent=styles['Heading2'],
+                fontName=chinese_font
+            )
+            heading3_style = ParagraphStyle(
+                'CustomHeading3',
+                parent=styles['Heading3'],
+                fontName=chinese_font
+            )
+            body_style = ParagraphStyle(
+                'CustomBody',
+                parent=styles['BodyText'],
+                fontName=chinese_font
+            )
+
             story = []
-            story.append(Paragraph("安全建议", styles['Heading2']))
+            story.append(Paragraph("安全建议", heading_style))
 
             for rec in recommendations:
-                story.append(Paragraph(f"<b>{rec['title']}</b>", styles['Heading3']))
+                story.append(Paragraph(f"<b>{rec['title']}</b>", heading3_style))
                 for item in rec['items']:
-                    story.append(Paragraph(f"• {item}", styles['BodyText']))
+                    story.append(Paragraph(f"• {item}", body_style))
                 story.append(Spacer(1, 0.1*inch))
 
             return story
