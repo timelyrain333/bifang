@@ -93,3 +93,6 @@ echo "停止服务:"
 echo "  pkill -f 'celery.*worker'"
 echo "  pkill -f 'celery.*beat'"
 echo ""
+
+
+

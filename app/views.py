@@ -11,7 +11,7 @@ from django.contrib.auth import authenticate, login, logout
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.decorators import method_decorator
 from django.utils import timezone
-from django.http import HttpResponse, StreamingHttpResponse, JsonResponse
+from django.http import HttpResponse, StreamingHttpResponse, JsonResponse, FileResponse, Http404
 from django.views import View
 import json
 import hashlib
@@ -21,13 +21,16 @@ from openpyxl.utils import get_column_letter
 import io
 import re
 import threading
+import os
 from datetime import datetime
-from .models import Plugin, Task, TaskExecution, Asset, AliyunConfig, AWSConfig, Vulnerability
+from pathlib import Path
+from .models import Plugin, Task, TaskExecution, Asset, AliyunConfig, AWSConfig, Vulnerability, HexStrikeExecution
 from django.db import transaction
 from django.db.models import Q
 from .services.secops_agent import SecOpsAgent
 from .services.hexstrike_client import HexStrikeClient
 from django.conf import settings as django_settings
+from .utils.hexstrike_export import HexStrikeReportExporter
 from .serializers import (
     PluginSerializer, TaskSerializer, TaskExecutionSerializer, AssetSerializer,
     AliyunConfigSerializer, AWSConfigSerializer, VulnerabilitySerializer
@@ -1132,34 +1135,151 @@ class SecOpsAgentViewSet(viewsets.ViewSet):
             )
             hexstrike_target = (ip_match.group(0) if ip_match else None) or (domain_match.group(0) if domain_match else None)
             security_keywords = [
-                '安全评估', '渗透测试', '漏洞扫描', '全面评估', '安全扫描', '扫描一下',
-                '做一次评估', '做一次扫描', '全面安全评估', '评估', '扫描',
+                '安全评估', '渗透测试', '漏洞扫描', '全面评估', '全面的安全评估', '全面安全评估',
+                '安全扫描', '扫描一下', '做一次评估', '做一次扫描', '评估', '扫描',
             ]
-            has_security_intent = any(kw in user_message for kw in security_keywords) or (
-                hexstrike_target and any(kw in user_message for kw in ['资产', '服务器', '目标', '对'])
-            )
+            has_security_keyword = any(kw in user_message for kw in security_keywords)
+            has_asset_keyword = any(kw in user_message for kw in ['资产', '服务器', '目标', '对', '云服务器'])
+            has_security_intent = has_security_keyword or (hexstrike_target and has_asset_keyword)
             hexstrike_enabled = getattr(django_settings, 'HEXSTRIKE_ENABLED', True)
+            
+            matched_security_keywords = [kw for kw in security_keywords if kw in user_message]
+            matched_asset_keywords = [kw for kw in ['资产', '服务器', '目标', '对', '云服务器'] if kw in user_message]
+            
+            logger.info(
+                "SecOps 视图层意图检测: hexstrike_target=%s, has_security_keyword=%s (%s), has_asset_keyword=%s (%s), "
+                "has_security_intent=%s, hexstrike_enabled=%s, user_message_preview=%s",
+                hexstrike_target, has_security_keyword, matched_security_keywords, 
+                has_asset_keyword, matched_asset_keywords, has_security_intent, 
+                hexstrike_enabled, (user_message or '')[:100]
+            )
+            
             if has_security_intent and hexstrike_target and hexstrike_enabled:
-                logger.info("SecOps 视图层直接调用 HexStrike: target=%s", hexstrike_target)
+                logger.info("✓ SecOps 视图层直接调用 HexStrike: target=%s", hexstrike_target)
 
                 def generate_hexstrike_response():
                     base_url = getattr(django_settings, 'HEXSTRIKE_SERVER_URL', 'http://localhost:8888')
-                    timeout = getattr(django_settings, 'HEXSTRIKE_TIMEOUT', 300)
+                    timeout = getattr(django_settings, 'HEXSTRIKE_TIMEOUT', 600)  # 增加到 10 分钟
                     client = HexStrikeClient(base_url=base_url, timeout=timeout)
+
+                    # 1) AI 目标分析（返回目标画像和策略建议）
                     result = client.analyze_target(hexstrike_target, analysis_type='comprehensive')
+                    logger.info("HexStrike analyze_target 结果: success=%s", result.get('success'))
+
+                    response_parts = []
+                    response_parts.append(f'### ✅ 已对目标 {hexstrike_target} 完成安全分析\n\n')
+
                     if result.get('success') and result.get('data') is not None:
-                        content_msg = f'### ✅ 已对目标 {hexstrike_target} 完成安全分析\n\n'
-                        yield f"data: {json.dumps({'content': content_msg}, ensure_ascii=False)}\n\n"
                         data = result['data']
-                        if isinstance(data, dict):
-                            yield f"data: {json.dumps({'content': json.dumps(data, ensure_ascii=False, indent=2)}, ensure_ascii=False)}\n\n"
+
+                        # 格式化并显示目标画像
+                        if isinstance(data, dict) and 'target_profile' in data:
+                            target_profile = data['target_profile']
+                            response_parts.append("## 📊 目标画像\n\n")
+                            response_parts.append(json.dumps(target_profile, ensure_ascii=False, indent=2))
+                            response_parts.append("\n\n")
+
+                    # 2) 执行 nmap 端口扫描
+                    logger.info("开始执行 Nmap 端口扫描: target=%s", hexstrike_target)
+                    nmap_res = client.run_command("nmap_scan", {"target": hexstrike_target})
+
+                    if nmap_res.get('success') and nmap_res.get('data') is not None:
+                        nmap_data = nmap_res['data']
+                        stdout = nmap_data.get('stdout', '')
+                        stderr = nmap_data.get('stderr', '')
+
+                        # 尝试格式化 Nmap 结果
+                        if stdout or stderr:
+                            try:
+                                from app.services.nmap_result_parser import format_nmap_result
+                                formatted_nmap = format_nmap_result(stdout, stderr)
+                                response_parts.append("## 🔍 Nmap 端口扫描结果\n\n")
+                                response_parts.append(formatted_nmap)
+                                response_parts.append("\n\n")
+                            except Exception as e:
+                                logger.warning(f"Nmap 结果格式化失败: {e}")
+                                response_parts.append("## 🔍 Nmap 端口扫描结果\n\n")
+                                response_parts.append(f"```\n{stdout[:1000]}\n```\n\n")
+                        logger.info("Nmap 扫描成功")
+                    elif not nmap_res.get('success'):
+                        error_msg = nmap_res.get('message', '未执行或失败')
+                        if 'timed out' in error_msg.lower():
+                            response_parts.append("## ⏱️ Nmap 端口扫描结果\n\n")
+                            response_parts.append("⚠️ 扫描超时\n\n")
                         else:
-                            yield f"data: {json.dumps({'content': str(data)}, ensure_ascii=False)}\n\n"
-                    else:
-                        msg = result.get('message', 'HexStrike 分析失败，请确认 HexStrike 服务已启动（默认 http://localhost:8888）。')
-                        err_msg = f'### ❌ {msg}\n\n'
-                        yield f"data: {json.dumps({'content': err_msg}, ensure_ascii=False)}\n\n"
+                            response_parts.append(f"**Nmap**：{error_msg}\n\n")
+                        logger.warning("Nmap 扫描失败: %s", nmap_res.get('message'))
+
+                    # 3) 执行 nuclei 漏洞扫描
+                    logger.info("开始执行 Nuclei 漏洞扫描: target=%s", hexstrike_target)
+                    nuclei_res = client.run_command("nuclei_scan", {"target": hexstrike_target})
+
+                    if nuclei_res.get('success') and nuclei_res.get('data') is not None:
+                        nuclei_data = nuclei_res['data']
+                        stdout = nuclei_data.get('stdout', '')
+                        stderr = nuclei_data.get('stderr', '')
+
+                        # 尝试格式化 Nuclei 结果
+                        if stdout or stderr:
+                            try:
+                                from app.services.nuclei_result_parser import format_nuclei_result
+                                formatted_nuclei = format_nuclei_result(stdout, stderr)
+                                response_parts.append("## 🔍 Nuclei 漏洞扫描结果\n\n")
+                                response_parts.append(formatted_nuclei)
+                                response_parts.append("\n\n")
+                            except Exception as e:
+                                logger.warning(f"Nuclei 结果格式化失败: {e}")
+                                response_parts.append("## 🔍 Nuclei 漏洞扫描结果\n\n")
+                                response_parts.append(f"```\n{stdout[:1000]}\n```\n\n")
+                        logger.info("Nuclei 扫描成功")
+                    elif not nuclei_res.get('success'):
+                        error_msg = nuclei_res.get('message', '未执行或失败')
+                        if 'timed out' in error_msg.lower() or 'timeout' in error_msg.lower():
+                            response_parts.append("## ⏱️ Nuclei 漏洞扫描结果\n\n")
+                            response_parts.append("⚠️ 扫描超时（超过10分钟），建议分端口扫描或减少扫描范围\n\n")
+                        else:
+                            response_parts.append(f"**Nuclei**：{error_msg}\n\n")
+                        logger.warning("Nuclei 扫描失败: %s", nuclei_res.get('message'))
+
+                    response_parts.append(f"---\n✅ 评估完成。查看 HexStrike 执行过程：`docker logs hexstrike-ai 2>&1 | grep -E \"EXECUTING|FINAL RESULTS|{hexstrike_target}\"`")
+
+                    # 生成 HTML 报告
+                    report_filename = None
+                    try:
+                        from app.services.hexstrike_html_reporter import HexStrikeHTMLReporter
+                        reporter = HexStrikeHTMLReporter()
+
+                        # 收集结果数据
+                        nmap_data = nmap_res.get('data') if nmap_res else None
+                        nuclei_data = nuclei_res.get('data') if nuclei_res else None
+                        target_profile = result.get('data', {}).get('target_profile') if result.get('data') else None
+
+                        # 生成报告
+                        report_filename = reporter.generate_report(
+                            target=hexstrike_target,
+                            nmap_results=nmap_data,
+                            nuclei_results=nuclei_data,
+                            target_profile=target_profile
+                        )
+
+                        logger.info(f"HexStrike HTML 报告已生成: {report_filename}")
+
+                        # 在响应末尾添加报告下载链接
+                        response_parts.append(f"\n\n📄 **完整报告下载**：[点击下载 HTML 报告](/api/reports/hexstrike/{report_filename})\n")
+
+                    except Exception as e:
+                        logger.warning(f"生成 HTML 报告失败: {e}", exc_info=True)
+
+                    # 流式输出响应内容
+                    full_response = ''.join(response_parts)
+                    # 分块输出，每1000字符一个块，提供更好的流式体验
+                    chunk_size = 1000
+                    for i in range(0, len(full_response), chunk_size):
+                        chunk = full_response[i:i + chunk_size]
+                        yield f"data: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
+                    
                     yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
+                    logger.info("HexStrike 安全评估响应已生成完成")
 
                 response = StreamingHttpResponse(
                     generate_hexstrike_response(),
@@ -1168,6 +1288,12 @@ class SecOpsAgentViewSet(viewsets.ViewSet):
                 response['Cache-Control'] = 'no-cache'
                 response['X-Accel-Buffering'] = 'no'
                 return response
+            elif has_security_intent and hexstrike_target and not hexstrike_enabled:
+                logger.warning("检测到安全评估意图但 HexStrike 未启用，继续执行 agent.chat()")
+            elif has_security_intent and not hexstrike_target:
+                logger.warning("检测到安全评估意图但未提取到目标，继续执行 agent.chat()")
+            else:
+                logger.debug("未检测到安全评估意图，继续执行 agent.chat()")
 
             conversation_history = request.data.get('conversation_history', [])
 
@@ -1268,6 +1394,247 @@ class SecOpsAgentViewSet(viewsets.ViewSet):
                 'message': str(e),
                 'server_url': base_url,
             })
+
+    @action(detail=False, methods=['get'])
+    def hexstrike_reports(self, request):
+        """
+        获取 HexStrike HTML 报告列表
+
+        查询参数：
+        - target: 过滤目标（可选）
+        - limit: 返回数量限制（默认 50）
+        """
+        try:
+            from pathlib import Path
+            from django.conf import settings
+
+            # 获取查询参数
+            target_filter = request.query_params.get('target', '').strip()
+            limit = int(request.query_params.get('limit', '50'))
+
+            # 构建 reports 目录路径
+            base_dir = Path(settings.BASE_DIR)
+            reports_dir = base_dir / 'reports'
+
+            if not reports_dir.exists():
+                return Response({
+                    'reports': [],
+                    'total': 0,
+                    'message': '报告目录不存在'
+                })
+
+            # 获取所有 HTML 报告文件
+            reports = []
+            for file_path in sorted(reports_dir.glob('hexstrike_report_*.html'), reverse=True):
+                try:
+                    # 从文件名提取信息
+                    filename = file_path.name
+                    stat = file_path.stat()
+
+                    # 解析文件名: hexstrike_report_{target}_{timestamp}.html
+                    parts = filename.replace('hexstrike_report_', '').replace('.html', '').rsplit('_', 1)
+                    if len(parts) == 2:
+                        target_part = parts[0].replace('_', '.')
+                        timestamp_part = parts[1]
+
+                        # 应用目标过滤
+                        if target_filter and target_filter.lower() not in target_part.lower():
+                            continue
+
+                        reports.append({
+                            'filename': filename,
+                            'target': target_part,
+                            'created_at': timestamp_part,
+                            'size': stat.st_size,
+                            'download_url': f'/api/reports/hexstrike/{filename}',
+                            'created_time': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                        })
+
+                        # 限制返回数量
+                        if len(reports) >= limit:
+                            break
+
+                except Exception as e:
+                    logger.warning(f"解析报告文件失败 {filename}: {e}")
+                    continue
+
+            return Response({
+                'reports': reports,
+                'total': len(reports),
+                'message': f'找到 {len(reports)} 份报告'
+            })
+
+        except Exception as e:
+            logger.error(f"获取报告列表失败: {e}", exc_info=True)
+            return Response({
+                'error': f'获取报告列表失败: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['get'])
+    def hexstrike_export(self, request):
+        """
+        导出 HexStrike 执行报告
+        支持格式：excel, pdf, html
+        
+        查询参数：
+        - format: 导出格式 (excel/pdf/html)，默认 excel
+        - target: 评估目标（可选，用于筛选）
+        - execution_ids: 执行记录ID列表，逗号分隔（可选）
+        - start_date: 开始日期（可选）
+        - end_date: 结束日期（可选）
+        """
+        try:
+            format_type = request.query_params.get('format', 'excel').lower()
+            target = request.query_params.get('target', None)
+            execution_ids_param = request.query_params.get('execution_ids', None)
+            start_date = request.query_params.get('start_date', None)
+            end_date = request.query_params.get('end_date', None)
+            
+            # 查询执行记录
+            queryset = HexStrikeExecution.objects.all()
+            
+            if target:
+                queryset = queryset.filter(target__icontains=target)
+            
+            if execution_ids_param:
+                execution_ids = [int(id.strip()) for id in execution_ids_param.split(',') if id.strip().isdigit()]
+                if execution_ids:
+                    queryset = queryset.filter(id__in=execution_ids)
+            
+            if start_date:
+                try:
+                    start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+                    queryset = queryset.filter(started_at__gte=start_dt)
+                except ValueError:
+                    pass
+            
+            if end_date:
+                try:
+                    end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+                    queryset = queryset.filter(started_at__lte=end_dt)
+                except ValueError:
+                    pass
+            
+            # 按时间倒序排列
+            queryset = queryset.order_by('-started_at')
+            
+            # 转换为字典列表
+            executions = []
+            for exec_obj in queryset:
+                executions.append({
+                    'id': exec_obj.id,
+                    'target': exec_obj.target,
+                    'tool_name': exec_obj.tool_name,
+                    'analysis_type': exec_obj.analysis_type,
+                    'status': exec_obj.status,
+                    'started_at': exec_obj.started_at,
+                    'finished_at': exec_obj.finished_at,
+                    'execution_time': exec_obj.execution_time,
+                    'created_by': exec_obj.created_by,
+                    'result': exec_obj.result,
+                    'error_message': exec_obj.error_message,
+                })
+            
+            if not executions:
+                return Response({
+                    'error': '没有找到符合条件的执行记录'
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            exporter = HexStrikeReportExporter()
+            
+            # 生成文件名
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            target_str = target or 'all'
+            filename_base = f'hexstrike_report_{target_str}_{timestamp}'
+            
+            if format_type == 'excel':
+                excel_file = exporter.export_to_excel(executions, target)
+                response = HttpResponse(
+                    excel_file.read(),
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+                response['Content-Disposition'] = f'attachment; filename="{filename_base}.xlsx"'
+                return response
+            
+            elif format_type == 'pdf':
+                pdf_file = exporter.export_to_pdf(executions, target)
+                response = HttpResponse(pdf_file.read(), content_type='application/pdf')
+                response['Content-Disposition'] = f'attachment; filename="{filename_base}.pdf"'
+                return response
+            
+            elif format_type == 'html':
+                html_content = exporter.export_to_html(executions, target)
+                response = HttpResponse(html_content, content_type='text/html; charset=utf-8')
+                response['Content-Disposition'] = f'attachment; filename="{filename_base}.html"'
+                return response
+            
+            else:
+                return Response({
+                    'error': f'不支持的导出格式: {format_type}。支持格式: excel, pdf, html'
+                }, status=status.HTTP_400_BAD_REQUEST)
+                
+        except Exception as e:
+            logger.exception(f"导出 HexStrike 报告失败: {e}")
+            return Response({
+                'error': f'导出失败: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=False, methods=['get'])
+    def hexstrike_executions(self, request):
+        """
+        获取 HexStrike 执行记录列表
+        """
+        try:
+            target = request.query_params.get('target', None)
+            status_filter = request.query_params.get('status', None)
+            page = int(request.query_params.get('page', 1))
+            page_size = int(request.query_params.get('page_size', 20))
+            
+            queryset = HexStrikeExecution.objects.all()
+            
+            if target:
+                queryset = queryset.filter(target__icontains=target)
+            
+            if status_filter:
+                queryset = queryset.filter(status=status_filter)
+            
+            queryset = queryset.order_by('-started_at')
+            
+            # 分页
+            total = queryset.count()
+            start = (page - 1) * page_size
+            end = start + page_size
+            executions = queryset[start:end]
+            
+            # 序列化
+            execution_list = []
+            for exec_obj in executions:
+                execution_list.append({
+                    'id': exec_obj.id,
+                    'target': exec_obj.target,
+                    'tool_name': exec_obj.tool_name,
+                    'analysis_type': exec_obj.analysis_type,
+                    'status': exec_obj.status,
+                    'started_at': exec_obj.started_at.isoformat() if exec_obj.started_at else None,
+                    'finished_at': exec_obj.finished_at.isoformat() if exec_obj.finished_at else None,
+                    'execution_time': exec_obj.execution_time,
+                    'created_by': exec_obj.created_by,
+                    'result': exec_obj.result,
+                    'error_message': exec_obj.error_message,
+                })
+            
+            return Response({
+                'total': total,
+                'page': page,
+                'page_size': page_size,
+                'results': execution_list
+            })
+            
+        except Exception as e:
+            logger.exception(f"获取 HexStrike 执行记录失败: {e}")
+            return Response({
+                'error': f'获取执行记录失败: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class DingTalkBotView(APIView):
@@ -1820,3 +2187,61 @@ class FeishuBotView(APIView):
             'configs': config_info,
             'config_count': len(config_info)
         })
+
+
+class HexStrikeReportDownloadView(APIView):
+    """HexStrike 报告下载视图"""
+    permission_classes = [AllowAny]  # 报告下载不需要认证，通过链接直接访问
+
+    def get(self, request, filename):
+        """
+        下载 HexStrike HTML 报告
+
+        Args:
+            filename: 报告文件名（如：hexstrike_report_101_37_29_229_20260206_123456.html）
+        """
+        try:
+            from pathlib import Path
+            from django.conf import settings
+
+            # 构建 reports 目录路径
+            base_dir = Path(settings.BASE_DIR)
+            reports_dir = base_dir / 'reports'
+            file_path = reports_dir / filename
+
+            # 检查文件是否存在
+            if not file_path.exists():
+                logger.warning(f"报告文件不存在: {filename}")
+                raise Http404(f"报告文件不存在: {filename}")
+
+            # 检查文件名格式（安全检查）
+            if not filename.startswith('hexstrike_report_') or not filename.endswith('.html'):
+                logger.warning(f"非法的文件名格式: {filename}")
+                return Response(
+                    {'error': '非法的文件名'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 读取文件内容
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+
+            # 返回文件响应
+            response = FileResponse(
+                io.BytesIO(file_content),
+                content_type='text/html; charset=utf-8'
+            )
+            response['Content-Disposition'] = f'inline; filename="{filename}"'
+            response['Content-Length'] = len(file_content)
+
+            logger.info(f"报告下载成功: {filename}, size={len(file_content)} bytes")
+            return response
+
+        except Http404:
+            raise
+        except Exception as e:
+            logger.error(f"下载报告失败: {e}", exc_info=True)
+            return Response(
+                {'error': f'下载失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

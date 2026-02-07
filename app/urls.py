@@ -6,7 +6,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     PluginViewSet, TaskViewSet, TaskExecutionViewSet, AssetViewSet, VulnerabilityViewSet,
     AliyunConfigViewSet, AWSConfigViewSet, LoginView, LogoutView, CurrentUserView, SecOpsAgentViewSet,
-    DingTalkBotView, FeishuBotView, TaskSSEView
+    DingTalkBotView, FeishuBotView, TaskSSEView, HexStrikeReportDownloadView
 )
 
 router = DefaultRouter()
@@ -26,5 +26,6 @@ urlpatterns = [
     path('api/tasks/sse/', TaskSSEView.as_view(), name='task-sse'),
     path('api/dingtalk/bot/', DingTalkBotView.as_view(), name='dingtalk-bot'),
     path('api/feishu/bot/', FeishuBotView.as_view(), name='feishu-bot'),
+    path('api/reports/hexstrike/<str:filename>/', HexStrikeReportDownloadView.as_view(), name='hexstrike-report-download'),
     path('api/', include(router.urls)),
 ]

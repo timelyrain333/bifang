@@ -19,16 +19,24 @@ logger = logging.getLogger(__name__)
 
 class DingTalkAgent:
     """钉钉机器人智能体"""
-    
+
     def __init__(self, config_id: int):
         """
         初始化钉钉机器人智能体
-        
+
         Args:
             config_id: AliyunConfig的ID（包含钉钉和AI配置）
         """
         self.config = AliyunConfig.objects.get(id=config_id)
         self.conversation_history = {}  # 存储每个用户的对话历史 {user_id: [messages]}
+
+        # 初始化统一对话服务
+        from app.services.secops_conversation import SecOpsConversationService
+        self.conversation_service = SecOpsConversationService(
+            api_key=self.config.qianwen_api_key,
+            api_base=self.config.qianwen_api_base or 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            model=self.config.qianwen_model or 'qwen-plus'
+        )
     
     def handle_message(self, webhook_url: str, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -113,36 +121,28 @@ class DingTalkAgent:
                 )
                 return
             
-            # 钉钉 Webhook 兜底：若消息为「安全评估 + IP/域名」，直接调用 HexStrike 再回复
-            ip_match = re.search(r'(?:\d{1,3}\.){3}\d{1,3}', user_message)
-            domain_match = re.search(
-                r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}',
-                user_message,
-            )
-            hexstrike_target = (ip_match.group(0) if ip_match else None) or (domain_match.group(0) if domain_match else None)
-            security_keywords = [
-                '安全评估', '渗透测试', '漏洞扫描', '全面评估', '安全扫描', '扫描一下',
-                '做一次评估', '做一次扫描', '全面安全评估', '评估', '扫描',
-            ]
-            has_security_intent = any(kw in user_message for kw in security_keywords) or (
-                hexstrike_target and any(kw in user_message for kw in ['资产', '服务器', '目标', '对'])
-            )
-            if has_security_intent and hexstrike_target and getattr(django_settings, 'HEXSTRIKE_ENABLED', True):
-                logger.info("钉钉 Webhook：检测到安全评估意图，直接调用 HexStrike: target=%s", hexstrike_target)
+            # 使用统一对话服务进行意图分析
+            intent_obj = self.conversation_service.analyze_intent(user_message, conversation_history)
+
+            # 如果检测到安全评估意图且有目标，直接调用 HexStrike
+            if intent_obj.needs_hexstrike_assessment and intent_obj.hexstrike_target and getattr(django_settings, 'HEXSTRIKE_ENABLED', True):
+                hexstrike_target = intent_obj.hexstrike_target
+                logger.info("钉钉：检测到安全评估意图，直接调用 HexStrike: target=%s", hexstrike_target)
                 try:
-                    base_url = getattr(django_settings, 'HEXSTRIKE_SERVER_URL', 'http://localhost:8888')
-                    timeout = getattr(django_settings, 'HEXSTRIKE_TIMEOUT', 300)
-                    client = HexStrikeClient(base_url=base_url, timeout=timeout)
-                    result = client.analyze_target(hexstrike_target, analysis_type='comprehensive')
-                    if result.get('success') and result.get('data') is not None:
-                        response = f"### ✅ 已对目标 {hexstrike_target} 完成安全分析\n\n"
-                        data = result['data']
-                        if isinstance(data, dict):
-                            response += json.dumps(data, ensure_ascii=False, indent=2)
-                        else:
-                            response += str(data)
-                    else:
-                        response = f"### ❌ {result.get('message', 'HexStrike 分析失败，请确认 HexStrike 服务已启动。')}\n\n"
+                    # 使用统一对话服务调用 HexStrike
+                    tool_result = self.conversation_service.call_hexstrike_analyze(
+                        target=hexstrike_target,
+                        analysis_type='comprehensive',
+                        user_id=sender_id
+                    )
+
+                    # 使用统一对话服务格式化响应（非流式）
+                    response = self.conversation_service.format_hexstrike_response_simple(
+                        target=hexstrike_target,
+                        result=tool_result,
+                        include_html_report=True
+                    )
+
                     send_dingtalk_message(
                         webhook_url=webhook_url,
                         secret=self.config.dingtalk_secret if self.config.dingtalk_secret else None,
@@ -156,7 +156,7 @@ class DingTalkAgent:
                     self.conversation_history[sender_id] = conversation_history
                     return
                 except Exception as e:
-                    logger.error("钉钉 Webhook：HexStrike 调用异常: %s", e, exc_info=True)
+                    logger.error("钉钉：HexStrike 调用异常: %s", e, exc_info=True)
                     send_dingtalk_message(
                         webhook_url=webhook_url,
                         secret=self.config.dingtalk_secret if self.config.dingtalk_secret else None,
@@ -164,48 +164,48 @@ class DingTalkAgent:
                         text=f"### ❌ HexStrike 调用异常: {str(e)}\n\n"
                     )
                     return
-            
-            # 创建智能体实例
+
+            # 其他情况：使用 SecOpsAgent 处理（包含 AI 对话）
             agent = SecOpsAgent(
                 api_key=self.config.qianwen_api_key,
                 api_base=self.config.qianwen_api_base or 'https://dashscope.aliyuncs.com/compatible-mode/v1',
                 model=self.config.qianwen_model or 'qwen-plus'
             )
-            
+
             # 收集所有响应内容
             full_response = ""
             response_chunks = []
             current_chunk = ""
             chunk_size = 3000  # 钉钉Markdown消息建议不超过4000字符，我们使用3000
-            
+
             # 调用智能体（流式返回）
             for chunk in agent.chat(user_message, conversation_history, None):
                 full_response += chunk
                 current_chunk += chunk
-                
+
                 # 如果当前块达到一定大小，准备发送
                 if len(current_chunk) >= chunk_size:
                     response_chunks.append(current_chunk)
                     current_chunk = ""
-            
+
             # 添加最后一块
             if current_chunk:
                 response_chunks.append(current_chunk)
-            
+
             # 如果没有响应块，添加完整响应
             if not response_chunks and full_response:
                 response_chunks.append(full_response)
-            
+
             # 发送响应（分批发送，避免消息过长）
             if response_chunks:
                 for idx, chunk in enumerate(response_chunks):
                     title = f"SecOps智能体回复"
                     if len(response_chunks) > 1:
                         title += f" ({idx + 1}/{len(response_chunks)})"
-                    
+
                     # 格式化消息（Markdown）
                     text = f"**您的指令**: {user_message}\n\n---\n\n{chunk}"
-                    
+
                     send_dingtalk_message(
                         webhook_url=webhook_url,
                         secret=self.config.dingtalk_secret if self.config.dingtalk_secret else None,
@@ -220,7 +220,7 @@ class DingTalkAgent:
                     title='处理完成',
                     text='✅ 指令已处理完成'
                 )
-            
+
             # 更新对话历史（只保留最近5轮对话）
             conversation_history.append({"role": "user", "content": user_message})
             conversation_history.append({"role": "assistant", "content": full_response})

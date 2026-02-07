@@ -9,6 +9,25 @@ module.exports = defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
         ws: true
+      },
+      // HexStrike API 代理（只代理 API 路径，避免与前端路由 /hexstrike 冲突）
+      // 注意：/hexstrike 路径是前端路由，不应该被代理
+      // 只有 /hexstrike/health、/hexstrike/api 等 API 路径才需要代理
+      '/hexstrike/health': {
+        target: 'http://localhost:8888',
+        changeOrigin: true,
+        ws: true,
+        pathRewrite: {
+          '^/hexstrike': ''
+        }
+      },
+      '/hexstrike/api': {
+        target: 'http://localhost:8888',
+        changeOrigin: true,
+        ws: true,
+        pathRewrite: {
+          '^/hexstrike': ''
+        }
       }
     }
   },

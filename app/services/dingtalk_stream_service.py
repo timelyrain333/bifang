@@ -171,7 +171,7 @@ def send_dingtalk_group_message(access_token: str, open_conversation_id: str,
 
 class DingTalkStreamChatbotHandler(dingtalk_stream.AsyncChatbotHandler):
     """钉钉Stream推送聊天机器人处理器"""
-    
+
     def __init__(self, config_id: int, logger: logging.Logger = None):
         super().__init__()
         self.config_id = config_id
@@ -181,13 +181,15 @@ class DingTalkStreamChatbotHandler(dingtalk_stream.AsyncChatbotHandler):
         self.processing_messages = set()  # 正在处理的消息ID集合，用于去重
         self._access_token = None
         self._access_token_expires_at = 0
-        
+        self.conversation_service = None  # 统一对话服务
+
         if logger:
             self.logger = logger
         else:
             self.logger = logging.getLogger(__name__)
-        
+
         self._load_config()
+        self._init_conversation_service()
     
     def _get_access_token(self) -> Optional[str]:
         """获取AccessToken（带缓存）"""
@@ -274,7 +276,7 @@ class DingTalkStreamChatbotHandler(dingtalk_stream.AsyncChatbotHandler):
         """加载配置"""
         try:
             self.config = AliyunConfig.objects.get(id=self.config_id)
-            
+
             # 获取关联的AI配置
             if self.config.qianwen_config:
                 self.ai_config = self.config.qianwen_config
@@ -288,6 +290,19 @@ class DingTalkStreamChatbotHandler(dingtalk_stream.AsyncChatbotHandler):
         except AliyunConfig.DoesNotExist:
             self.logger.error(f"配置 {self.config_id} 不存在")
             raise
+
+    def _init_conversation_service(self):
+        """初始化统一对话服务"""
+        if self.ai_config and self.ai_config.qianwen_api_key:
+            from app.services.secops_conversation import SecOpsConversationService
+            self.conversation_service = SecOpsConversationService(
+                api_key=self.ai_config.qianwen_api_key,
+                api_base=self.ai_config.qianwen_api_base or 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+                model=self.ai_config.qianwen_model or 'qwen-plus'
+            )
+            self.logger.info("统一对话服务已初始化")
+        else:
+            self.conversation_service = None
     
     def process(self, callback: dingtalk_stream.CallbackMessage):
         """
@@ -449,35 +464,24 @@ class DingTalkStreamChatbotHandler(dingtalk_stream.AsyncChatbotHandler):
                 hexstrike_target and any(kw in (content or '') for kw in ['资产', '服务器', '目标', '对'])
             )
             _dingtalk_hexstrike_debug(f"意图检测 has_security_intent={has_security_intent} hexstrike_target={hexstrike_target!r} HEXSTRIKE_ENABLED={getattr(django_settings, 'HEXSTRIKE_ENABLED', True)}")
-            if has_security_intent and hexstrike_target and getattr(django_settings, 'HEXSTRIKE_ENABLED', True):
+            if has_security_intent and hexstrike_target and getattr(django_settings, 'HEXSTRIKE_ENABLED', True) and self.conversation_service:
                 _dingtalk_hexstrike_debug(f"HEXSTRIKE_DIRECT_CALL target={hexstrike_target}")
-                self.logger.info("钉钉：检测到安全评估意图，直接调用 HexStrike: target=%s", hexstrike_target)
+                self.logger.info("钉钉：检测到安全评估意图，使用统一对话服务调用 HexStrike: target=%s", hexstrike_target)
                 try:
-                    base_url = getattr(django_settings, 'HEXSTRIKE_SERVER_URL', 'http://localhost:8888')
-                    timeout = getattr(django_settings, 'HEXSTRIKE_TIMEOUT', 300)
-                    client = HexStrikeClient(base_url=base_url, timeout=timeout)
-                    response = f"### 目标 {hexstrike_target} 安全评估\n\n"
-                    # 1) AI 分析（可能无实际扫描，仅策略/摘要）
-                    result = client.analyze_target(hexstrike_target, analysis_type='comprehensive')
-                    if result.get('success') and result.get('data') is not None:
-                        data = result['data']
-                        if isinstance(data, dict) and data:
-                            response += "**分析摘要**\n```\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n```\n\n"
-                        elif data:
-                            response += "**分析摘要**\n" + str(data) + "\n\n"
-                    # 2) 显式执行 nmap 扫描，便于在 docker logs 中看到执行过程
-                    nmap_res = client.run_command("nmap_scan", {"target": hexstrike_target})
-                    if nmap_res.get('success') and nmap_res.get('data') is not None:
-                        response += "**Nmap 端口扫描结果**\n```\n" + json.dumps(nmap_res['data'], ensure_ascii=False, indent=2) + "\n```\n\n"
-                    elif not nmap_res.get('success'):
-                        response += "**Nmap**：" + (nmap_res.get('message') or '未执行或失败') + "\n\n"
-                    # 3) 显式执行 nuclei 漏洞扫描（目标为 http://IP 或 IP）
-                    nuclei_res = client.run_command("nuclei_scan", {"target": hexstrike_target})
-                    if nuclei_res.get('success') and nuclei_res.get('data') is not None:
-                        response += "**Nuclei 漏洞扫描结果**\n```\n" + json.dumps(nuclei_res['data'], ensure_ascii=False, indent=2) + "\n```\n\n"
-                    elif not nuclei_res.get('success'):
-                        response += "**Nuclei**：" + (nuclei_res.get('message') or '未执行或失败') + "\n\n"
-                    response += f"---\n✅ 评估完成。查看 HexStrike 执行过程：`docker logs hexstrike-ai 2>&1 | grep -E \"EXECUTING|FINAL RESULTS|{hexstrike_target}\"`"
+                    # 使用统一对话服务调用 HexStrike
+                    tool_result = self.conversation_service.call_hexstrike_analyze(
+                        target=hexstrike_target,
+                        analysis_type='comprehensive',
+                        user_id=user_id
+                    )
+
+                    # 使用统一对话服务格式化响应（非流式）
+                    response = self.conversation_service.format_hexstrike_response_simple(
+                        target=hexstrike_target,
+                        result=tool_result,
+                        include_html_report=True
+                    )
+
                     self.conversation_history[user_id].append({'role': 'assistant', 'content': response})
                     if len(self.conversation_history[user_id]) > 40:
                         self.conversation_history[user_id] = self.conversation_history[user_id][-40:]

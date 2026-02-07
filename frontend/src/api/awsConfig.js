@@ -36,3 +36,5 @@ export const awsConfigApi = {
     return api.get('/aws-configs/default/')
   }
 }
+
+

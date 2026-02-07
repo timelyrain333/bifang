@@ -609,3 +609,5 @@ class Plugin(BasePlugin):
             except ValueError:
                 continue
         return None
+
+

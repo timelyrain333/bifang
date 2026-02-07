@@ -11,6 +11,8 @@ import SystemConfig from '../views/SystemConfig.vue'
 import AliyunConfig from '../views/AliyunConfig.vue'
 import AWSConfig from '../views/AWSConfig.vue'
 import SecOpsAgent from '../views/SecOpsAgent.vue'
+import HexStrike from '../views/HexStrike.vue'
+import HexStrikeReports from '../views/HexStrikeReports.vue'
 
 const routes = [
   {
@@ -98,6 +100,18 @@ const routes = [
     name: 'SecOpsAgent',
     component: SecOpsAgent,
     meta: { requiresAuth: true, title: 'SecOps智能体' }
+  },
+  {
+    path: '/hexstrike',
+    name: 'HexStrike',
+    component: HexStrike,
+    meta: { requiresAuth: true, title: 'HexStrike AI 控制台' }
+  },
+  {
+    path: '/hexstrike/reports',
+    name: 'HexStrikeReports',
+    component: HexStrikeReports,
+    meta: { requiresAuth: true, title: 'HexStrike 安全评估报告' }
   }
 ]
 

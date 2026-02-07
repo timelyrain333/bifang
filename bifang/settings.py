@@ -247,4 +247,4 @@ LOGGING = {
 # 参考: https://github.com/0x4m4/hexstrike-ai
 HEXSTRIKE_SERVER_URL = os.environ.get('HEXSTRIKE_SERVER_URL', 'http://localhost:8888')
 HEXSTRIKE_ENABLED = os.environ.get('HEXSTRIKE_ENABLED', 'true').lower() in ('1', 'true', 'yes')
-HEXSTRIKE_TIMEOUT = int(os.environ.get('HEXSTRIKE_TIMEOUT', '300'))
+HEXSTRIKE_TIMEOUT = int(os.environ.get('HEXSTRIKE_TIMEOUT', '600'))  # 10分钟，支持 Nuclei 完整扫描

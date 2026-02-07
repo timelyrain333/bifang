@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Plugin, Task, TaskExecution, Asset, AliyunConfig
+from .models import Plugin, Task, TaskExecution, Asset, AliyunConfig, HexStrikeExecution
 
 
 @admin.register(Plugin)
@@ -40,3 +40,13 @@ class AliyunConfigAdmin(admin.ModelAdmin):
     search_fields = ['user__username', 'name', 'access_key_id']
     readonly_fields = ['created_at', 'updated_at']
     date_hierarchy = 'created_at'
+
+
+@admin.register(HexStrikeExecution)
+class HexStrikeExecutionAdmin(admin.ModelAdmin):
+    list_display = ['id', 'target', 'tool_name', 'analysis_type', 'status', 'started_at', 'finished_at', 'execution_time', 'created_by']
+    list_filter = ['status', 'analysis_type', 'started_at']
+    search_fields = ['target', 'tool_name', 'created_by']
+    readonly_fields = ['started_at', 'finished_at', 'execution_time']
+    date_hierarchy = 'started_at'
+    list_per_page = 50

@@ -260,3 +260,5 @@ pip3 install boto3
 - `eu-west-1` - 欧洲（爱尔兰）
 
 完整区域列表请参考：[AWS 区域和终端节点](https://docs.aws.amazon.com/general/latest/gr/rande.html)
+
+

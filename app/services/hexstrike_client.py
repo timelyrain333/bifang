@@ -48,6 +48,21 @@ class HexStrikeClient:
             logger.warning(f"HexStrike health check failed: {e}")
             return {'success': False, 'message': str(e), 'data': None}
 
+    def clear_cache(self) -> Dict[str, Any]:
+        """
+        清除 HexStrike 缓存，确保下次扫描返回最新结果。
+        POST /api/cache/clear
+        """
+        try:
+            r = self._session.post(f'{self.base_url}/api/cache/clear', timeout=10)
+            r.raise_for_status()
+            data = r.json() if r.text else {}
+            logger.info("HexStrike: 缓存已清除")
+            return {'success': True, 'data': data}
+        except requests.RequestException as e:
+            logger.warning(f"HexStrike clear cache failed: {e}")
+            return {'success': False, 'message': str(e), 'data': None}
+
     def analyze_target(self, target: str, analysis_type: str = 'comprehensive') -> Dict[str, Any]:
         """
         AI 驱动的目标分析（官方: POST /api/intelligence/analyze-target）。

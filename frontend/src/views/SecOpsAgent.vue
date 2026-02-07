@@ -116,6 +116,16 @@ export default {
         .replace(/✅/g, '<span style="color: #67c23a;">✅</span>')
         .replace(/❌/g, '<span style="color: #f56c6c;">❌</span>')
         .replace(/⚠️/g, '<span style="color: #e6a23c;">⚠️</span>')
+        // 转换报告链接为按钮
+        .replace(
+          /\[点击下载 HTML 报告\]\((\/api\/reports\/hexstrike\/[^)]+)\)/g,
+          '<div style="margin-top: 15px;"><el-button type="primary" size="small" icon="el-icon-download" onclick="window.open(\'$1\', \'_blank\')">📄 下载完整 HTML 报告</el-button></div>'
+        )
+        // 转换普通链接
+        .replace(
+          /\[([^\]]+)\]\(([^)]+)\)/g,
+          '<a href="$2" target="_blank" style="color: #409EFF; text-decoration: none;">$1</a>'
+        )
     }
     
     const scrollToBottom = () => {

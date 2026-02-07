@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HexStrike 安全评估报告 - {{ target }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: "Microsoft YaHei", "SimHei", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #366092;
+            border-bottom: 3px solid #366092;
+            padding-bottom: 15px;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+        h2 {
+            color: #366092;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 8px;
+            font-size: 20px;
+        }
+        h3 {
+            color: #555;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        .header-info {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 30px;
+        }
+        .header-info p {
+            margin: 5px 0;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-card.success {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        }
+        .stat-card.failed {
+            background: linear-gradient(135deg, #ee0979 0%, #ff6a00 100%);
+        }
+        .stat-card.running {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .stat-label {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 14px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #366092;
+            color: white;
+            font-weight: bold;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        .status-success {
+            color: #67C23A;
+            font-weight: bold;
+        }
+        .status-failed {
+            color: #F56C6C;
+            font-weight: bold;
+        }
+        .status-running {
+            color: #E6A23C;
+            font-weight: bold;
+        }
+        .execution-detail {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background: #fafafa;
+        }
+        .execution-header {
+            font-weight: bold;
+            color: #366092;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        .result-data {
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-family: "Courier New", monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .vulnerability-item {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .vulnerability-item.critical {
+            background: #f8d7da;
+            border-left-color: #dc3545;
+        }
+        .vulnerability-item.high {
+            background: #fff3cd;
+            border-left-color: #ffc107;
+        }
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+            text-align: center;
+            color: #666;
+            font-size: 12px;
+        }
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+            }
+            .container {
+                box-shadow: none;
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>HexStrike 安全评估综合报告</h1>
+        
+        <div class="header-info">
+            <p><strong>评估目标：</strong>{{ target }}</p>
+            <p><strong>报告生成时间：</strong>{{ report_time }}</p>
+            <p><strong>执行记录总数：</strong>{{ total_executions }}</p>
+        </div>
+        
+        <div class="stats">
+            <div class="stat-card success">
+                <div class="stat-value">{{ success_count }}</div>
+                <div class="stat-label">成功执行</div>
+            </div>
+            <div class="stat-card failed">
+                <div class="stat-value">{{ failed_count }}</div>
+                <div class="stat-label">失败执行</div>
+            </div>
+            <div class="stat-card running">
+                <div class="stat-value">{{ running_count }}</div>
+                <div class="stat-label">执行中</div>
+            </div>
+        </div>
+        
+        <h2>执行记录概览</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>执行ID</th>
+                    <th>评估目标</th>
+                    <th>工具名称</th>
+                    <th>分析类型</th>
+                    <th>状态</th>
+                    <th>开始时间</th>
+                    <th>结束时间</th>
+                    <th>执行耗时</th>
+                    <th>执行人</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for execution in executions %}
+                <tr>
+                    <td>{{ execution.id }}</td>
+                    <td>{{ execution.target }}</td>
+                    <td>{{ execution.tool_name|default:"综合分析" }}</td>
+                    <td>{{ execution.analysis_type }}</td>
+                    <td>
+                        <span class="status-{{ execution.status }}">
+                            {% if execution.status == 'success' %}成功
+                            {% elif execution.status == 'failed' %}失败
+                            {% else %}执行中{% endif %}
+                        </span>
+                    </td>
+                    <td>{{ execution.started_at|date:"Y-m-d H:i:s" }}</td>
+                    <td>{{ execution.finished_at|date:"Y-m-d H:i:s"|default:"-" }}</td>
+                    <td>
+                        {% if execution.execution_time %}
+                            {{ execution.execution_time|floatformat:2 }} 秒
+                        {% else %}-{% endif %}
+                    </td>
+                    <td>{{ execution.created_by|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="9" style="text-align: center;">暂无执行记录</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        
+        {% if all_vulnerabilities %}
+        <h2>发现的漏洞</h2>
+        {% for vuln in all_vulnerabilities %}
+        <div class="vulnerability-item {% if 'critical' in vuln.severity|lower or '严重' in vuln.severity %}critical{% elif 'high' in vuln.severity|lower or '高' in vuln.severity %}high{% endif %}">
+            <div class="execution-header">
+                {% if vuln.cve_id %}CVE-{{ vuln.cve_id }}{% endif %}
+                {% if vuln.name %}{{ vuln.name }}{% endif %}
+                {% if vuln.severity %}({{ vuln.severity }}){% endif %}
+            </div>
+            {% if vuln.description %}
+            <p><strong>描述：</strong>{{ vuln.description }}</p>
+            {% endif %}
+            {% if vuln.target %}
+            <p><strong>目标：</strong>{{ vuln.target }}</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+        {% endif %}
+        
+        {% if all_tools %}
+        <h2>工具执行结果</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>工具名称</th>
+                    <th>目标</th>
+                    <th>状态</th>
+                    <th>结果摘要</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for tool in all_tools %}
+                <tr>
+                    <td>{{ tool.name|default:"-" }}</td>
+                    <td>{{ tool.target|default:"-" }}</td>
+                    <td>
+                        <span class="status-{{ tool.status|default:'success' }}">
+                            {{ tool.status|default:"成功" }}
+                        </span>
+                    </td>
+                    <td>{{ tool.summary|default:"-"|truncatewords:20 }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {% if all_ports %}
+        <h2>端口扫描结果</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>端口</th>
+                    <th>协议</th>
+                    <th>状态</th>
+                    <th>服务</th>
+                    <th>目标</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for port in all_ports %}
+                <tr>
+                    <td>{{ port.port|default:"-" }}</td>
+                    <td>{{ port.protocol|default:"TCP" }}</td>
+                    <td>{{ port.state|default:"open" }}</td>
+                    <td>{{ port.service|default:"-" }}</td>
+                    <td>{{ port.target|default:"-" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        <h2>详细执行记录</h2>
+        {% for execution in executions %}
+        <div class="execution-detail">
+            <div class="execution-header">
+                执行记录 #{{ execution.id }} - {{ execution.target }}
+            </div>
+            <p><strong>工具名称：</strong>{{ execution.tool_name|default:"综合分析" }}</p>
+            <p><strong>分析类型：</strong>{{ execution.analysis_type }}</p>
+            <p><strong>状态：</strong>
+                <span class="status-{{ execution.status }}">
+                    {% if execution.status == 'success' %}成功
+                    {% elif execution.status == 'failed' %}失败
+                    {% else %}执行中{% endif %}
+                </span>
+            </p>
+            <p><strong>开始时间：</strong>{{ execution.started_at|date:"Y-m-d H:i:s" }}</p>
+            {% if execution.finished_at %}
+            <p><strong>结束时间：</strong>{{ execution.finished_at|date:"Y-m-d H:i:s" }}</p>
+            {% endif %}
+            {% if execution.execution_time %}
+            <p><strong>执行耗时：</strong>{{ execution.execution_time|floatformat:2 }} 秒</p>
+            {% endif %}
+            {% if execution.created_by %}
+            <p><strong>执行人：</strong>{{ execution.created_by }}</p>
+            {% endif %}
+            
+            {% if execution.result %}
+            <h3>执行结果</h3>
+            <div class="result-data">{{ execution.result }}</div>
+            {% endif %}
+            
+            {% if execution.error_message %}
+            <h3>错误信息</h3>
+            <div class="result-data" style="color: #F56C6C;">{{ execution.error_message }}</div>
+            {% endif %}
+        </div>
+        {% empty %}
+        <p>暂无执行记录</p>
+        {% endfor %}
+        
+        <div class="footer">
+            <p>本报告由 HexStrike AI 安全评估系统自动生成</p>
+            <p>报告生成时间：{{ report_time }}</p>
+        </div>
+    </div>
+</body>
+</html>

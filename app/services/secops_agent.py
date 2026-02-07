@@ -10,7 +10,7 @@ import sys
 from typing import Dict, Any, List, Optional, Generator
 from app.services.task_executor import TaskExecutor
 from app.services.asset_matcher import AssetMatcher
-from app.models import Vulnerability, Asset, Plugin
+from app.models import Vulnerability, Asset, Plugin, HexStrikeExecution
 from app.services.task_tools import (
     create_task, list_tasks, update_task, parse_cron_from_natural_language,
     get_plugin_by_name_or_keyword,
@@ -238,12 +238,12 @@ TOOLS = [
 
 class SecOpsAgent:
     """SecOps智能体"""
-    
-    def __init__(self, api_key: str, api_base: str = 'https://dashscope.aliyuncs.com/compatible-mode/v1', 
+
+    def __init__(self, api_key: str, api_base: str = 'https://dashscope.aliyuncs.com/compatible-mode/v1',
                  model: str = 'qwen-plus'):
         """
         初始化智能体
-        
+
         Args:
             api_key: 通义千问API Key
             api_base: API地址
@@ -278,6 +278,14 @@ class SecOpsAgent:
             api_key=api_key,
             base_url=api_base,
             timeout=300.0,  # 5分钟超时
+        )
+
+        # 初始化统一对话服务
+        from app.services.secops_conversation import SecOpsConversationService
+        self.conversation_service = SecOpsConversationService(
+            api_key=api_key,
+            api_base=api_base,
+            model=model
         )
     
     def chat(self, user_message: str, conversation_history: Optional[List[Dict]] = None, 
@@ -322,37 +330,63 @@ class SecOpsAgent:
         # 添加当前用户消息
         messages.append({"role": "user", "content": user_message})
         
-        # 先分析用户意图，判断是否需要执行操作
-        intent_analysis = self._analyze_intent(user_message)
+        # 先分析用户意图，判断是否需要执行操作（使用统一对话服务）
+        intent_obj = self.conversation_service.analyze_intent(user_message, conversation_history)
+        intent_analysis = {
+            'needs_vulnerability_collection': intent_obj.needs_vulnerability_collection,
+            'needs_asset_collection': intent_obj.needs_asset_collection,
+            'needs_matching': intent_obj.needs_matching,
+            'needs_hexstrike_assessment': intent_obj.needs_hexstrike_assessment,
+            'hexstrike_target': intent_obj.hexstrike_target,
+            'days': intent_obj.days,
+            'is_query': intent_obj.is_query,
+        }
+        needs_hexstrike = intent_obj.needs_hexstrike_assessment
+        hexstrike_target = intent_obj.hexstrike_target
         logger.info(
-            "SecOps 意图分析: needs_hexstrike=%s, hexstrike_target=%s, is_query=%s, user_message_len=%d",
-            intent_analysis.get('needs_hexstrike_assessment'),
-            intent_analysis.get('hexstrike_target'),
-            intent_analysis.get('is_query'),
+            "SecOps 意图分析: needs_hexstrike=%s, hexstrike_target=%s, is_query=%s, user_message_len=%d, user_message_preview=%s",
+            needs_hexstrike,
+            hexstrike_target,
+            intent_obj.is_query,
             len(user_message or ''),
+            (user_message or '')[:100],
         )
-        
+
         # 当用户明确要求对某目标做安全评估且已从消息中提取到目标时，直接调用 HexStrike，不依赖模型是否返回 tool_call
-        if intent_analysis.get('needs_hexstrike_assessment') and intent_analysis.get('hexstrike_target'):
-            target = intent_analysis['hexstrike_target']
-            logger.info("检测到安全评估意图且已提取目标，直接调用 HexStrike: target=%s", target)
-            tool_result = self._call_tool(
-                'hexstrike_analyze_target',
-                {'target': target, 'analysis_type': 'comprehensive'},
-                user,
-            )
-            if tool_result.get('success'):
-                yield f"### ✅ {tool_result.get('message', '已对目标完成安全分析')}\n\n"
-                if tool_result.get('data'):
-                    data = tool_result['data']
-                    if isinstance(data, dict):
-                        yield json.dumps(data, ensure_ascii=False, indent=2)
-                    else:
-                        yield str(data)
-                    yield "\n\n"
-            else:
-                yield f"### ❌ {tool_result.get('message', 'HexStrike 分析失败')}\n\n"
+        # 重要：即使有对话历史，也强制执行新扫描，不使用历史结果
+        if needs_hexstrike and hexstrike_target:
+            target = hexstrike_target
+            logger.info("✓ 检测到安全评估意图且已提取目标，直接调用 HexStrike: target=%s", target)
+            try:
+                # 获取用户 ID
+                user_id = None
+                if user:
+                    if hasattr(user, 'username'):
+                        user_id = user.username
+                    elif isinstance(user, str):
+                        user_id = user
+
+                # 使用统一对话服务调用 HexStrike
+                tool_result = self.conversation_service.call_hexstrike_analyze(
+                    target=target,
+                    analysis_type='comprehensive',
+                    user_id=user_id
+                )
+
+                # 使用统一对话服务格式化响应（流式）
+                yield from self.conversation_service.format_hexstrike_response(
+                    target=target,
+                    result=tool_result,
+                    include_html_report=True
+                )
+            except Exception as e:
+                logger.error(f"调用 HexStrike 失败: {e}", exc_info=True)
+                yield f"### ❌ HexStrike 调用异常: {str(e)}\n\n"
             return
+        elif needs_hexstrike and not hexstrike_target:
+            logger.warning("检测到安全评估意图但未提取到目标，继续执行 AI 调用: user_message=%s", user_message[:100])
+        else:
+            logger.debug("未检测到安全评估意图，继续执行 AI 调用")
         
         # 调用模型，支持Function Calling
         try:
@@ -597,13 +631,14 @@ class SecOpsAgent:
         
         return True
     
-    def _analyze_intent(self, user_message: str) -> Dict[str, Any]:
+    def _analyze_intent(self, user_message: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
         """
         分析用户意图
-        
+
         Args:
             user_message: 用户消息
-            
+            conversation_history: 对话历史（用于上下文理解）
+
         Returns:
             Dict: 意图分析结果
         """
@@ -617,20 +652,61 @@ class SecOpsAgent:
             'days': 1,  # 默认1天
             'is_query': False  # 是否是查询类消息（介绍、说明、帮助等）
         }
-        
+
         # 先识别「安全评估」类意图并提取目标（优先于 is_query，避免被误判为仅查询）
         security_assessment_keywords = [
-            '安全评估', '渗透测试', '漏洞扫描', '全面评估', '安全扫描', '扫描一下',
-            '做一次评估', '做一次扫描', '全面安全评估', '评估', '扫描'
+            '安全评估', '渗透测试', '漏洞扫描', '全面评估', '全面的安全评估', '全面安全评估',
+            '安全扫描', '扫描一下', '做一次评估', '做一次扫描', '评估', '扫描'
         ]
+
+        # 重新扫描/再次扫描的关键词（从对话历史中提取目标）
+        rescan_keywords = ['重新扫描', '再扫描一次', '再次扫描', '再评估', '重新评估', '扫描这个', '再次评估']
+
         has_security_keyword = any(kw in user_message for kw in security_assessment_keywords)
+        has_rescan_keyword = any(kw in user_message for kw in rescan_keywords)
+
         # 若消息中同时包含「评估/扫描」类词和 IP/域名，也视为安全评估（避免漏掉「对 101.37.29.229 扫描」等说法）
         ipv4_in_msg = re.search(r'(?:\d{1,3}\.){3}\d{1,3}', user_message)
         domain_in_msg = re.search(
             r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}',
             user_message
         )
-        if has_security_keyword or (ipv4_in_msg and ('资产' in user_message or '服务器' in user_message or '目标' in user_message or '对' in user_message)):
+
+        # 增强匹配：如果消息中包含IP/域名，且包含"资产"、"服务器"、"目标"、"对"等关键词，也视为安全评估意图
+        has_asset_keyword = any(kw in user_message for kw in ['资产', '服务器', '目标', '对', '云服务器'])
+
+        # 处理重新扫描的情况：从对话历史中提取之前扫描过的目标
+        if has_rescan_keyword and not ipv4_in_msg and not domain_in_msg:
+            # 从对话历史中查找最近扫描过的目标
+            if conversation_history:
+                # 倒序查找最近的 IP/域名
+                for msg in reversed(conversation_history):
+                    content = msg.get('content', '')
+                    # 查找 IPv4 地址
+                    ipv4_match = re.search(r'(?:\d{1,3}\.){3}\d{1,3}', content)
+                    if ipv4_match:
+                        intent['hexstrike_target'] = ipv4_match.group(0).strip()
+                        intent['needs_hexstrike_assessment'] = True
+                        logger.info(
+                            "意图分析：从对话历史中提取到重新扫描目标，target=%s",
+                            intent['hexstrike_target']
+                        )
+                        break
+                    # 查找域名
+                    domain_match = re.search(
+                        r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}',
+                        content
+                    )
+                    if domain_match:
+                        intent['hexstrike_target'] = domain_match.group(0).strip()
+                        intent['needs_hexstrike_assessment'] = True
+                        logger.info(
+                            "意图分析：从对话历史中提取到重新扫描目标，target=%s",
+                            intent['hexstrike_target']
+                        )
+                        break
+
+        if has_security_keyword or (ipv4_in_msg and has_asset_keyword) or (domain_in_msg and has_asset_keyword):
             intent['needs_hexstrike_assessment'] = True
             # 提取目标：优先 IPv4（不用 \b，避免 IP 紧邻中文时匹配失败）
             if ipv4_in_msg:
@@ -642,6 +718,12 @@ class SecOpsAgent:
                 host_match = re.search(r'([a-zA-Z0-9][a-zA-Z0-9.-]{2,50})', user_message)
                 if host_match:
                     intent['hexstrike_target'] = host_match.group(1).strip()
+            logger.info(
+                "意图分析：识别到安全评估意图，target=%s, has_security_keyword=%s, has_asset_keyword=%s",
+                intent.get('hexstrike_target'),
+                has_security_keyword,
+                has_asset_keyword
+            )
         
         # 检查是否是查询类消息（介绍、说明、帮助等），这类消息不应该执行操作
         # 若已识别为安全评估且已提取目标，不按纯查询处理
@@ -1140,22 +1222,90 @@ class SecOpsAgent:
                 if not target:
                     return {'success': False, 'message': '请提供要分析的目标（IP、域名或主机名）。'}
                 analysis_type = function_args.get('analysis_type') or 'comprehensive'
-                client = HexStrikeClient(
-                    base_url=getattr(settings, 'HEXSTRIKE_SERVER_URL', 'http://localhost:8888'),
-                    timeout=getattr(settings, 'HEXSTRIKE_TIMEOUT', 300),
+                
+                # 创建执行记录
+                import time
+                from django.utils import timezone
+                execution = HexStrikeExecution.objects.create(
+                    target=target,
+                    analysis_type=analysis_type,
+                    status='running',
+                    created_by=getattr(self, 'user_id', None) or '',
                 )
-                result = client.analyze_target(target, analysis_type=analysis_type)
-                if result.get('success') and result.get('data') is not None:
+                start_time = time.time()
+                
+                try:
+                    client = HexStrikeClient(
+                        base_url=getattr(settings, 'HEXSTRIKE_SERVER_URL', 'http://localhost:8888'),
+                        timeout=getattr(settings, 'HEXSTRIKE_TIMEOUT', 600),  # 增加到 10 分钟
+                    )
+                    result = client.analyze_target(target, analysis_type=analysis_type)
+
+                    # 如果成功，格式化 nmap 和 nuclei 的结果
+                    if result.get('success') and result.get('data'):
+                        data = result['data']
+
+                        # 格式化 Nmap 结果
+                        if 'nmap_results' in data and data['nmap_results']:
+                            from app.services.nmap_result_parser import format_nmap_result
+                            nmap_data = data['nmap_results']
+                            stdout = nmap_data.get('stdout', '')
+                            stderr = nmap_data.get('stderr', '')
+
+                            if stdout or stderr:
+                                formatted_nmap = format_nmap_result(stdout, stderr)
+                                data['nmap_results']['formatted_output'] = formatted_nmap
+                                data['nmap_results']['raw_output'] = stdout or stderr
+
+                        # 格式化 Nuclei 结果
+                        if 'nuclei_results' in data and data['nuclei_results']:
+                            from app.services.nuclei_result_parser import format_nuclei_result
+                            nuclei_data = data['nuclei_results']
+                            stdout = nuclei_data.get('stdout', '')
+                            stderr = nuclei_data.get('stderr', '')
+
+                            if stdout or stderr:
+                                formatted_nuclei = format_nuclei_result(stdout, stderr)
+                                data['nuclei_results']['formatted_output'] = formatted_nuclei
+                                data['nuclei_results']['raw_output'] = stdout or stderr
+
+                        # 处理超时错误
+                        if 'nuclei_results' in data and isinstance(data['nuclei_results'], dict):
+                            if data['nuclei_results'].get('timed_out') or 'timed out' in str(data['nuclei_results']).lower():
+                                data['nuclei_results']['error'] = '扫描超时（超过10分钟），建议分端口扫描或减少扫描范围'
+
+                    # 更新执行记录
+                    execution_time = time.time() - start_time
+                    execution.status = 'success' if result.get('success') else 'failed'
+                    execution.finished_at = timezone.now()
+                    execution.execution_time = execution_time
+                    execution.result = result.get('data', {})
+                    if not result.get('success'):
+                        execution.error_message = result.get('message', '执行失败')
+                    execution.save()
+                    
+                    if result.get('success') and result.get('data') is not None:
+                        return {
+                            'success': True,
+                            'message': f'已对目标 {target} 完成安全分析',
+                            'data': result['data'],
+                            'execution_id': execution.id,
+                        }
                     return {
-                        'success': True,
-                        'message': f'已对目标 {target} 完成安全分析',
-                        'data': result['data'],
+                        'success': False,
+                        'message': result.get('message', 'HexStrike 分析失败，请确认 HexStrike 服务已启动（默认 http://localhost:8888）。'),
+                        'data': result.get('data'),
+                        'execution_id': execution.id,
                     }
-                return {
-                    'success': False,
-                    'message': result.get('message', 'HexStrike 分析失败，请确认 HexStrike 服务已启动（默认 http://localhost:8888）。'),
-                    'data': result.get('data'),
-                }
+                except Exception as e:
+                    # 更新执行记录为失败
+                    execution_time = time.time() - start_time
+                    execution.status = 'failed'
+                    execution.finished_at = timezone.now()
+                    execution.execution_time = execution_time
+                    execution.error_message = str(e)
+                    execution.save()
+                    raise
             
             elif function_name == 'hexstrike_run_scan':
                 if not getattr(settings, 'HEXSTRIKE_ENABLED', True):
@@ -1174,22 +1324,114 @@ class SecOpsAgent:
                     return {'success': False, 'message': '请提供要执行的工具名称（如 nmap_scan, nuclei_scan）。'}
                 if arguments is None:
                     arguments = {}
-                client = HexStrikeClient(
-                    base_url=getattr(settings, 'HEXSTRIKE_SERVER_URL', 'http://localhost:8888'),
-                    timeout=getattr(settings, 'HEXSTRIKE_TIMEOUT', 300),
+                
+                # 从 arguments 中提取 target，如果没有则使用默认值
+                target = arguments.get('target', '') or arguments.get('host', '') or 'unknown'
+                
+                # 创建执行记录
+                import time
+                from django.utils import timezone
+                execution = HexStrikeExecution.objects.create(
+                    target=target,
+                    tool_name=tool_name,
+                    analysis_type='tool_scan',
+                    status='running',
+                    created_by=getattr(self, 'user_id', None) or '',
                 )
-                result = client.run_command(tool_name, arguments)
-                if result.get('success') and result.get('data') is not None:
+                start_time = time.time()
+                
+                try:
+                    client = HexStrikeClient(
+                        base_url=getattr(settings, 'HEXSTRIKE_SERVER_URL', 'http://localhost:8888'),
+                        timeout=getattr(settings, 'HEXSTRIKE_TIMEOUT', 600),  # 增加到 10 分钟
+                    )
+
+                    # Nuclei 扫描优化：添加默认参数以避免超时
+                    if tool_name in ('nuclei_scan', 'nuclei'):
+                        # 如果用户没有指定严重级别，默认只扫描高危和严重漏洞
+                        if isinstance(arguments, dict) and 'severity' not in arguments:
+                            arguments['severity'] = 'critical,high'
+
+                        # 限制并发和速率，加快扫描速度
+                        if isinstance(arguments, dict):
+                            if 'rl' not in arguments:
+                                arguments['rl'] = 50  # 每秒请求数
+                            if 'c' not in arguments:
+                                arguments['c'] = 10  # 并发模板数
+                            if 'timeout' not in arguments:
+                                arguments['timeout'] = 10  # 单个请求超时（秒）
+                            if 'retries' not in arguments:
+                                arguments['retries'] = 1  # 减少重试次数
+                            # 强制使用 JSON 输出格式，便于解析和美化
+                            if 'json' not in arguments:
+                                arguments['json'] = True  # 启用 JSON 输出
+
+                    result = client.run_command(tool_name, arguments)
+
+                    # 如果是 Nuclei 扫描，解析和格式化结果
+                    if result.get('success') and tool_name in ('nuclei_scan', 'nuclei'):
+                        from app.services.nuclei_result_parser import format_nuclei_result
+
+                        data = result.get('data', {})
+                        stdout = data.get('stdout', '')
+                        stderr = data.get('stderr', '')
+
+                        # 如果有输出，尝试格式化
+                        if stdout or stderr:
+                            formatted_result = format_nuclei_result(stdout, stderr)
+
+                            # 将格式化结果添加到返回数据中
+                            result['data']['formatted_output'] = formatted_result
+                            result['data']['raw_output'] = stdout or stderr
+
+                    # 如果是 Nmap 扫描，解析和格式化结果
+                    elif result.get('success') and tool_name in ('nmap_scan', 'nmap'):
+                        from app.services.nmap_result_parser import format_nmap_result
+
+                        data = result.get('data', {})
+                        stdout = data.get('stdout', '')
+                        stderr = data.get('stderr', '')
+
+                        # 如果有输出，尝试格式化
+                        if stdout or stderr:
+                            formatted_result = format_nmap_result(stdout, stderr)
+
+                            # 将格式化结果添加到返回数据中
+                            result['data']['formatted_output'] = formatted_result
+                            result['data']['raw_output'] = stdout or stderr
+
+                    # 更新执行记录
+                    execution_time = time.time() - start_time
+                    execution.status = 'success' if result.get('success') else 'failed'
+                    execution.finished_at = timezone.now()
+                    execution.execution_time = execution_time
+                    execution.result = result.get('data', {})
+                    if not result.get('success'):
+                        execution.error_message = result.get('message', '执行失败')
+                    execution.save()
+                    
+                    if result.get('success') and result.get('data') is not None:
+                        return {
+                            'success': True,
+                            'message': f'已执行 {tool_name}',
+                            'data': result['data'],
+                            'execution_id': execution.id,
+                        }
                     return {
-                        'success': True,
-                        'message': f'已执行 {tool_name}',
-                        'data': result['data'],
+                        'success': False,
+                        'message': result.get('message', f'HexStrike 执行 {tool_name} 失败，请确认服务已启动且工具名正确。'),
+                        'data': result.get('data'),
+                        'execution_id': execution.id,
                     }
-                return {
-                    'success': False,
-                    'message': result.get('message', f'HexStrike 执行 {tool_name} 失败，请确认服务已启动且工具名正确。'),
-                    'data': result.get('data'),
-                }
+                except Exception as e:
+                    # 更新执行记录为失败
+                    execution_time = time.time() - start_time
+                    execution.status = 'failed'
+                    execution.finished_at = timezone.now()
+                    execution.execution_time = execution_time
+                    execution.error_message = str(e)
+                    execution.save()
+                    raise
             
             else:
                 return {

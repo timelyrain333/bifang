@@ -130,3 +130,5 @@ print("\n建议:")
 print("1. 如果有卡住的任务，运行: python manage.py fix_stuck_executions")
 print("2. 检查 Celery Worker 日志: tail -f logs/celery_worker.log")
 print("3. 检查 Django 日志: tail -f logs/django.log")
+
+

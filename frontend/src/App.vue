@@ -75,6 +75,10 @@
               <el-icon><ChatDotRound /></el-icon>
               <span>SecOps智能体</span>
             </el-menu-item>
+            <el-menu-item index="/hexstrike">
+              <el-icon><Monitor /></el-icon>
+              <span>HexStrike AI</span>
+            </el-menu-item>
           </el-menu>
         </el-aside>
         <el-main class="app-main">
@@ -92,7 +96,7 @@
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, User, ChatDotRound } from '@element-plus/icons-vue'
+import { ArrowDown, User, ChatDotRound, Monitor } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth'
 import { authApi } from './api/auth'
 
@@ -101,7 +105,8 @@ export default {
   components: {
     ArrowDown,
     User,
-    ChatDotRound
+    ChatDotRound,
+    Monitor
   },
   setup() {
     const route = useRoute()
