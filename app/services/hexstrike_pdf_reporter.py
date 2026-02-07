@@ -1,6 +1,7 @@
 """
 HexStrike 扫描报告 PDF 生成器
 使用 ReportLab 直接生成 PDF 格式报告
+格式与 HTML 报告保持一致
 """
 import os
 import logging
@@ -120,20 +121,50 @@ class HexStrikePDFReporter:
             title_style = ParagraphStyle(
                 'CustomTitle',
                 parent=styles['Heading1'],
-                fontSize=24,
-                textColor=colors.HexColor('#667eea'),
-                spaceAfter=30,
+                fontSize=28,
+                textColor=colors.whitesmoke,
+                spaceAfter=12,
+                alignment=TA_CENTER,
+                fontName=chinese_font,
+                leading=36
+            )
+
+            subtitle_style = ParagraphStyle(
+                'CustomSubtitle',
+                parent=styles['Normal'],
+                fontSize=14,
+                textColor=colors.whitesmoke,
                 alignment=TA_CENTER,
                 fontName=chinese_font
             )
 
-            heading_style = ParagraphStyle(
-                'CustomHeading',
+            meta_style = ParagraphStyle(
+                'CustomMeta',
+                parent=styles['Normal'],
+                fontSize=11,
+                textColor=colors.white,
+                alignment=TA_CENTER,
+                fontName=chinese_font,
+                leading=16
+            )
+
+            heading2_style = ParagraphStyle(
+                'Heading2',
                 parent=styles['Heading2'],
-                fontSize=16,
+                fontSize=18,
                 textColor=colors.HexColor('#667eea'),
                 spaceAfter=12,
                 spaceBefore=20,
+                fontName=chinese_font,
+                leading=24
+            )
+
+            heading3_style = ParagraphStyle(
+                'Heading3',
+                parent=styles['Heading3'],
+                fontSize=14,
+                textColor=colors.HexColor('#667eea'),
+                spaceAfter=10,
                 fontName=chinese_font
             )
 
@@ -141,67 +172,110 @@ class HexStrikePDFReporter:
                 'BodyText',
                 parent=styles['BodyText'],
                 fontName=chinese_font,
-                fontSize=10
+                fontSize=10,
+                leading=14,
+                spaceAfter=6
             )
 
-            # 标题
-            story.append(Paragraph("安全评估报告", title_style))
-            story.append(Paragraph(f"目标: {target}", normal_style))
-            story.append(Paragraph(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))
-            story.append(Paragraph(f"评估工具: HexStrike AI (Nmap + Nuclei)", normal_style))
+            # 1. 报告头部（渐变背景效果用紫色表格模拟）
+            header_data = [
+                [Paragraph("安全评估报告", title_style)],
+                [Paragraph(f"目标: {target}", subtitle_style)],
+                [Paragraph(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", meta_style)],
+                [Paragraph(f"评估工具: HexStrike AI (Nmap + Nuclei)", meta_style)]
+            ]
+
+            header_table = Table(header_data, colWidths=[6.5*inch])
+            header_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#667eea')),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('TOPPADDING', (0, 0), (-1, -1), 20),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 20),
+                ('LEFTPADDING', (0, 0), (-1, -1), 20),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 20),
+            ]))
+
+            story.append(header_table)
             story.append(Spacer(1, 0.3*inch))
 
             # 统计数据
             stats = self._extract_stats(nmap_results, nuclei_results)
 
-            # 统计卡片表格
-            stats_data = [
-                ['严重漏洞', str(stats['vulnerabilities']['critical'])],
-                ['高危漏洞', str(stats['vulnerabilities']['high'])],
-                ['中危漏洞', str(stats['vulnerabilities']['medium'])],
-                ['低危漏洞', str(stats['vulnerabilities']['low'])],
-                ['开放端口', str(stats['ports']['open'])],
+            # 2. 统计卡片（5个卡片一行）
+            card_data = []
+            card_row = []
+
+            # 定义卡片颜色
+            card_colors = {
+                'critical': colors.HexColor('#f56c6c'),
+                'high': colors.HexColor('#e6a23c'),
+                'medium': colors.HexColor('#409eff'),
+                'low': colors.HexColor('#67c23a'),
+                'ports': colors.HexColor('#909399')
+            }
+
+            # 创建5个统计卡片
+            cards = [
+                ('严重漏洞', stats['vulnerabilities']['critical'], card_colors['critical']),
+                ('高危漏洞', stats['vulnerabilities']['high'], card_colors['high']),
+                ('中危漏洞', stats['vulnerabilities']['medium'], card_colors['medium']),
+                ('低危漏洞', stats['vulnerabilities']['low'], card_colors['low']),
+                ('开放端口', stats['ports']['open'], card_colors['ports'])
             ]
 
-            stats_table = Table(stats_data, colWidths=[2.5*inch, 2.5*inch])
-            stats_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, -1), chinese_font),
-                ('FONTSIZE', (0, 0), (-1, 0), 12),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black)
-            ]))
+            for label, value, color in cards:
+                card_content = [
+                    Paragraph(f"<b>{value}</b>", ParagraphStyle('CardNumber', fontName=chinese_font, fontSize=24, textColor=color, alignment=TA_CENTER)),
+                    Paragraph(label, ParagraphStyle('CardLabel', fontName=chinese_font, fontSize=11, textColor=colors.grey, alignment=TA_CENTER))
+                ]
+                card_table = Table(card_content, colWidths=[1.2*inch])
+                card_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, -1), colors.white),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ('TOPPADDING', (0, 0), (-1, -1), 15),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey)
+                ]))
+                card_row.append(card_table)
 
-            story.append(stats_table)
+            card_data.append(card_row)
+            cards_table = Table(card_data)
+            story.append(cards_table)
             story.append(Spacer(1, 0.3*inch))
 
-            # 漏洞列表
+            # 3. 漏洞扫描结果
             if nuclei_results and nuclei_results.get('success'):
-                vuln_section = self._generate_vulnerabilities_section(nuclei_results, styles, chinese_font)
+                vuln_section = self._generate_vulnerabilities_section(nuclei_results, heading2_style, heading3_style, normal_style, chinese_font)
                 if vuln_section:
                     story.extend(vuln_section)
 
-            # 端口列表
+            # 4. 端口扫描结果
             if nmap_results and nmap_results.get('success'):
-                port_section = self._generate_ports_section(nmap_results, styles, chinese_font)
+                port_section = self._generate_ports_section(nmap_results, heading2_style, heading3_style, normal_style, chinese_font)
                 if port_section:
                     story.extend(port_section)
 
-            # 安全建议
-            recommendations = self._generate_recommendations_section(nmap_results, nuclei_results, styles, chinese_font)
+            # 5. 安全建议
+            recommendations = self._generate_recommendations_section(nmap_results, nuclei_results, heading2_style, heading3_style, normal_style, chinese_font)
             if recommendations:
                 story.extend(recommendations)
 
-            # 页脚
+            # 6. 页脚
             story.append(PageBreak())
-            story.append(Paragraph("本报告由 HexStrike AI 自动生成", normal_style))
+            footer_style = ParagraphStyle(
+                'Footer',
+                parent=styles['Normal'],
+                fontName=chinese_font,
+                fontSize=10,
+                textColor=colors.grey,
+                alignment=TA_CENTER,
+                leading=16
+            )
+            story.append(Paragraph("本报告由 HexStrike AI 自动生成", footer_style))
             story.append(Spacer(1, 0.1*inch))
-            story.append(Paragraph("建议: 定期进行安全评估，及时修复发现的漏洞", normal_style))
+            story.append(Paragraph("建议：定期进行安全评估，及时修复发现的漏洞", footer_style))
             story.append(Spacer(1, 0.1*inch))
-            story.append(Paragraph(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))
+            story.append(Paragraph(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", footer_style))
 
             # 生成 PDF
             doc.build(story)
@@ -256,8 +330,8 @@ class HexStrikePDFReporter:
 
         return stats
 
-    def _generate_vulnerabilities_section(self, nuclei_results: Optional[Dict], styles, chinese_font: str) -> list:
-        """生成漏洞列表部分"""
+    def _generate_vulnerabilities_section(self, nuclei_results: Optional[Dict], heading2_style, heading3_style, normal_style, chinese_font: str) -> list:
+        """生成漏洞列表部分（与HTML格式一致）"""
         try:
             import json
             from reportlab.platypus import Paragraph, Spacer, KeepTogether
@@ -280,17 +354,11 @@ class HexStrikePDFReporter:
                     pass
 
             if not vulnerabilities:
-                heading_style = ParagraphStyle(
-                    'CustomHeading2',
-                    parent=styles['Heading2'],
-                    fontName=chinese_font
-                )
-                body_style = ParagraphStyle(
-                    'CustomBody',
-                    parent=styles['BodyText'],
-                    fontName=chinese_font
-                )
-                return [Paragraph("未发现漏洞", heading_style), Spacer(1, 0.2*inch)]
+                story = []
+                story.append(Paragraph("漏洞扫描结果", heading2_style))
+                story.append(Paragraph("未发现已知漏洞", normal_style))
+                story.append(Spacer(1, 0.2*inch))
+                return story
 
             # 按严重性分组
             by_severity = {'critical': [], 'high': [], 'medium': [], 'low': [], 'info': []}
@@ -301,23 +369,7 @@ class HexStrikePDFReporter:
                 by_severity[severity].append(vuln)
 
             story = []
-            heading2_style = ParagraphStyle(
-                'CustomHeading2',
-                parent=styles['Heading2'],
-                fontName=chinese_font
-            )
-            heading3_style = ParagraphStyle(
-                'CustomHeading3',
-                parent=styles['Heading3'],
-                fontName=chinese_font
-            )
-            body_style = ParagraphStyle(
-                'CustomBody',
-                parent=styles['BodyText'],
-                fontName=chinese_font
-            )
-
-            story.append(Paragraph("漏洞扫描结果", heading2_style))
+            story.append(Paragraph("🔍 漏洞扫描结果", heading2_style))
 
             severity_labels = {
                 'critical': ('严重', colors.red),
@@ -333,24 +385,52 @@ class HexStrikePDFReporter:
                     continue
 
                 label, color = severity_labels[severity]
-                story.append(Paragraph(f"{label.upper()} ({len(vulns)})", heading3_style))
 
+                # 创建带边框的漏洞项
                 for vuln in vulns[:20]:  # 最多显示 20 个
                     info = vuln.get('info', {})
                     name = info.get('name', 'Unknown')
                     description = info.get('description', '')[:200]
+                    tags = info.get('tags', [])[:5]
 
-                    vuln_text = f"<b>{name}</b>"
+                    # 漏洞标题（带严重性标签）
+                    vuln_title = f'<font color="{self._color_to_hex(color)}"><b>[{label}]</b></font> <b>{name}</b>'
+
+                    # 构建漏洞内容
+                    vuln_content = [Paragraph(vuln_title, normal_style)]
+
+                    # 添加标签
+                    if tags:
+                        tag_text = ' '.join([f'<font color="#409eff">#{tag}</font>' for tag in tags])
+                        vuln_content.append(Paragraph(tag_text, ParagraphStyle('Tags', parent=normal_style, fontSize=9)))
+
+                    # 添加描述
                     if description:
-                        vuln_text += f"<br/>{description}..."
+                        vuln_content.append(Paragraph(description + '...', ParagraphStyle('Desc', parent=normal_style, fontSize=9, textColor=colors.grey)))
 
-                    story.append(Paragraph(vuln_text, body_style))
-                    story.append(Spacer(1, 0.1*inch))
+                    # 创建漏洞项表格（带左边框颜色）
+                    vuln_table = Table([
+                        [vuln_content[0]],
+                        [vuln_content[1]] if len(vuln_content) > 1 else [''],
+                        [vuln_content[2]] if len(vuln_content) > 2 else ['']
+                    ])
+                    vuln_table.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, -1), colors.white),
+                        ('LEFTPADDING', (0, 0), (-1, -1), 12),
+                        ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+                        ('TOPPADDING', (0, 0), (-1, -1), 10),
+                        ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+                        ('LINEBELOW', (0, 0), (0, -1), 4, color),
+                        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ]))
+
+                    story.append(vuln_table)
+                    story.append(Spacer(1, 0.05*inch))
 
                 if len(vulns) > 20:
-                    story.append(Paragraph(f"还有 {len(vulns) - 20} 个{label}漏洞未显示", body_style))
+                    story.append(Paragraph(f"<i>还有 {len(vulns) - 20} 个{label}漏洞未显示...</i>", ParagraphStyle('Note', parent=normal_style, fontSize=9, textColor=colors.grey)))
 
-                story.append(Spacer(1, 0.2*inch))
+                story.append(Spacer(1, 0.15*inch))
 
             return story
 
@@ -358,8 +438,8 @@ class HexStrikePDFReporter:
             logger.warning(f"生成漏洞部分失败: {e}")
             return []
 
-    def _generate_ports_section(self, nmap_results: Optional[Dict], styles, chinese_font: str) -> list:
-        """生成端口列表部分"""
+    def _generate_ports_section(self, nmap_results: Optional[Dict], heading2_style, heading3_style, normal_style, chinese_font: str) -> list:
+        """生成端口列表部分（与HTML格式一致）"""
         try:
             import re
             from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
@@ -386,49 +466,58 @@ class HexStrikePDFReporter:
                 })
 
             if not ports:
-                heading_style = ParagraphStyle(
-                    'CustomHeading2',
-                    parent=styles['Heading2'],
-                    fontName=chinese_font
-                )
-                body_style = ParagraphStyle(
-                    'CustomBody',
-                    parent=styles['BodyText'],
-                    fontName=chinese_font
-                )
-                return [Paragraph("端口扫描结果", heading_style), Spacer(1, 0.2*inch), Paragraph("未发现开放端口。", body_style), Spacer(1, 0.2*inch)]
+                story = []
+                story.append(Paragraph("🔌 端口扫描结果", heading2_style))
+                story.append(Paragraph("未发现开放端口", normal_style))
+                story.append(Spacer(1, 0.2*inch))
+                return story
 
             story = []
-            heading_style = ParagraphStyle(
-                'CustomHeading2',
-                parent=styles['Heading2'],
-                fontName=chinese_font
-            )
-            story.append(Paragraph("端口扫描结果", heading_style))
+            story.append(Paragraph("🔌 端口扫描结果", heading2_style))
 
-            # 创建端口表格
-            port_data = [['端口', '服务', '版本']]
+            # 为每个端口创建卡片
             for port_info in ports:
-                port_data.append([
-                    f"{port_info['port']}/tcp",
-                    port_info['service'],
-                    port_info['version'][:30] if port_info['version'] else ''
-                ])
+                port = port_info['port']
+                service = port_info['service']
+                version = port_info['version']
 
-            port_table = Table(port_data, colWidths=[1.5*inch, 2*inch, 2.5*inch])
-            port_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, -1), chinese_font),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('FONTSIZE', (0, 1), (-1, -1), 9)
-            ]))
+                # 评估端口风险
+                risk = self._assess_port_risk(port, service)
+                risk_color = {
+                    'critical': colors.HexColor('#f56c6c'),
+                    'medium': colors.HexColor('#409eff'),
+                    'low': colors.HexColor('#67c23a')
+                }.get(risk['level'], colors.grey)
 
-            story.append(port_table)
-            story.append(Spacer(1, 0.2*inch))
+                # 端口号和服务
+                port_content = [
+                    Paragraph(f"<b>端口 {port}/tcp</b>", ParagraphStyle('PortNum', parent=normal_style, fontSize=13, fontName=chinese_font)),
+                    Paragraph(f"服务：{service}", ParagraphStyle('Service', parent=normal_style, fontSize=10))
+                ]
+
+                # 风险标签
+                if risk:
+                    risk_label = f'<font color="{self._color_to_hex(risk_color)}">⚠️ {risk["label"]}</font>'
+                    port_content[1] = Paragraph(f'服务：{service}  {risk_label}', ParagraphStyle('ServiceRisk', parent=normal_style, fontSize=10))
+
+                # 版本信息
+                if version:
+                    port_content.append(Paragraph(version[:50], ParagraphStyle('Version', parent=normal_style, fontSize=9, textColor=colors.grey)))
+
+                # 创建端口卡片表格
+                port_table = Table([[content] for content in port_content])
+                port_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f9f9f9')),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 12),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+                    ('TOPPADDING', (0, 0), (-1, -1), 10),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+                    ('LINEBELOW', (0, 0), (0, -1), 4, risk_color),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ]))
+
+                story.append(port_table)
+                story.append(Spacer(1, 0.1*inch))
 
             return story
 
@@ -436,11 +525,11 @@ class HexStrikePDFReporter:
             logger.warning(f"生成端口部分失败: {e}")
             return []
 
-    def _generate_recommendations_section(self, nmap_results: Optional[Dict], nuclei_results: Optional[Dict], styles, chinese_font: str) -> list:
-        """生成修复建议部分"""
+    def _generate_recommendations_section(self, nmap_results: Optional[Dict], nuclei_results: Optional[Dict], heading2_style, heading3_style, normal_style, chinese_font: str) -> list:
+        """生成修复建议部分（与HTML格式一致）"""
         try:
             from reportlab.platypus import Paragraph, Spacer
-            from reportlab.lib.styles import ParagraphStyle
+            from reportlab.lib import colors
 
             recommendations = []
 
@@ -450,7 +539,7 @@ class HexStrikePDFReporter:
 
                 if 'ssh' in stdout.lower():
                     recommendations.append({
-                        'title': 'SSH 安全加固',
+                        'title': '🔐 SSH 安全加固',
                         'items': [
                             '禁用密码登录，只允许密钥认证',
                             '修改默认端口（22）',
@@ -461,7 +550,7 @@ class HexStrikePDFReporter:
 
                 if 'elasticsearch' in stdout.lower() or ':9200' in stdout:
                     recommendations.append({
-                        'title': 'Elasticsearch 安全加固',
+                        'title': '🔍 Elasticsearch 安全加固',
                         'items': [
                             '启用 X-Pack 安全认证',
                             '配置访问控制列表（ACL）',
@@ -475,7 +564,7 @@ class HexStrikePDFReporter:
                 stdout = nuclei_results.get('stdout', '')
                 if 'critical' in stdout.lower() or 'high' in stdout.lower():
                     recommendations.append({
-                        'title': '漏洞修复优先级',
+                        'title': '🚨 漏洞修复优先级',
                         'items': [
                             '立即修复严重和高危漏洞',
                             '隔离受影响的系统',
@@ -487,29 +576,27 @@ class HexStrikePDFReporter:
             if not recommendations:
                 return []
 
-            heading_style = ParagraphStyle(
-                'CustomHeading2',
-                parent=styles['Heading2'],
-                fontName=chinese_font
-            )
-            heading3_style = ParagraphStyle(
-                'CustomHeading3',
-                parent=styles['Heading3'],
-                fontName=chinese_font
-            )
-            body_style = ParagraphStyle(
-                'CustomBody',
-                parent=styles['BodyText'],
-                fontName=chinese_font
-            )
-
             story = []
-            story.append(Paragraph("安全建议", heading_style))
+            story.append(Paragraph("💡 安全建议", heading2_style))
 
             for rec in recommendations:
+                # 建议卡片
+                rec_style = ParagraphStyle(
+                    'Recommendation',
+                    parent=normal_style,
+                    fontName=chinese_font,
+                    backColor=colors.HexColor('#f0f9ff'),
+                    leftIndent=12,
+                    rightIndent=12,
+                    topIndent=12,
+                    bottomIndent=12
+                )
+
                 story.append(Paragraph(f"<b>{rec['title']}</b>", heading3_style))
+
                 for item in rec['items']:
-                    story.append(Paragraph(f"• {item}", body_style))
+                    story.append(Paragraph(f"• {item}", rec_style))
+
                 story.append(Spacer(1, 0.1*inch))
 
             return story
@@ -517,3 +604,27 @@ class HexStrikePDFReporter:
         except Exception as e:
             logger.warning(f"生成建议部分失败: {e}")
             return []
+
+    def _assess_port_risk(self, port: str, service: str) -> Optional[Dict]:
+        """评估端口风险（与HTML一致）"""
+        port_num = int(port) if port.isdigit() else 0
+        service_lower = service.lower()
+
+        critical_ports = [22, 23, 135, 139, 445, 3389]
+        critical_services = ['telnet', 'ftp', 'rsh', 'rlogin']
+
+        if port_num in critical_ports or service_lower in critical_services:
+            return {'level': 'critical', 'label': '严重'}
+        elif port_num < 1024:
+            return {'level': 'medium', 'label': '中危'}
+        else:
+            return {'level': 'low', 'label': '低危'}
+
+    def _color_to_hex(self, color) -> str:
+        """将ReportLab颜色转换为十六进制字符串"""
+        if hasattr(color, 'red'):  # 是CMYKColor或RGBColor
+            try:
+                return f"#{int(color.red*255):02x}{int(color.green*255):02x}{int(color.blue*255):02x}"
+            except:
+                return "#000000"
+        return "#000000"
