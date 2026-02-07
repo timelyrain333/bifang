@@ -228,7 +228,8 @@ class HexStrikePDFReporter:
                     Paragraph(f"<b>{value}</b>", ParagraphStyle('CardNumber', fontName=chinese_font, fontSize=24, textColor=color, alignment=TA_CENTER)),
                     Paragraph(label, ParagraphStyle('CardLabel', fontName=chinese_font, fontSize=11, textColor=colors.grey, alignment=TA_CENTER))
                 ]
-                card_table = Table(card_content, colWidths=[1.2*inch])
+                # 包装为二维列表（每行是一个列表）
+                card_table = Table([card_content], colWidths=[1.2*inch])
                 card_table.setStyle(TableStyle([
                     ('BACKGROUND', (0, 0), (-1, -1), colors.white),
                     ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
