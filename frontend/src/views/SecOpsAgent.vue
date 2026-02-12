@@ -28,7 +28,7 @@
             <div
               v-for="(msg, index) in chatStore.messages"
               :key="msg.id || index"
-              :class="['message', msg.role]"
+              :class="['message', msg.role, { 'message-thinking': msg.type === 'thinking', 'message-final': msg.type === 'final' }]"
             >
               <div class="message-header">
                 <span class="role-name">
@@ -37,9 +37,13 @@
                 <span class="message-time">{{ formatTime(msg.timestamp) }}</span>
               </div>
               <div
-                :class="['message-content', { 'streaming': msg.role === 'assistant' && msg.isStreaming }]"
-                v-html="formatMessage(msg.content)"
-              ></div>
+                :class="['message-content', { 'streaming': msg.isStreaming, 'content-thinking': msg.type === 'thinking', 'content-final': msg.type === 'final' }]"
+              >
+                <div v-if="msg.type === 'thinking'" class="thinking-expand" @click="msg.expandable = !msg.expandable">
+                  <span class="expand-icon">{{ msg.expandable ? '▼' : '▶' }}</span>
+                </div>
+                <div v-html="formatMessage(msg.content)"></div>
+              </div>
             </div>
           </TransitionGroup>
         </div>
@@ -253,15 +257,17 @@ const sendMessage = async () => {
   inputRows.value = 3
   chatStore.setLoading(true)
 
-  // 创建助手消息占位（不保存到数据库，等流式结束后再保存）
+  // 创建助手思考过程消息占位（不保存到数据库）
   chatStore.addMessage({
     role: 'assistant',
-    content: '',
+    type: 'thinking',  // 新增：消息类型
+    content: '正在思考...',
     timestamp: new Date(),
     isStreaming: true
   }, false)
 
   scrollToBottom(true)
+}
 
   try {
     // 构建对话历史（排除当前正在流式输出的消息）
@@ -295,8 +301,18 @@ const sendMessage = async () => {
       for (const line of lines) {
         if (line.startsWith('data: ')) {
           try {
-            const data = JSON.parse(line.substring(6))
+            const rawData = line.substring(6)
 
+            // 尝试解析为 JSON（新格式：{"type": "thinking", "content": "..."}）
+            let data
+            try {
+              data = JSON.parse(rawData)
+            } catch (e) {
+              // 不是 JSON 格式，当作普通文本处理
+              data = { content: rawData }
+            }
+
+            // 处理不同类型的消息
             if (data.error) {
               ElMessage.error(data.error)
               chatStore.updateLastMessage(
@@ -306,12 +322,34 @@ const sendMessage = async () => {
               // 流式结束，保存消息到数据库
               await chatStore.syncLastMessage()
               chatStore.setMessageStreaming(false)
-            } else if (data.content) {
-              // 追加内容（实现打字机效果）
+            } else if (data.content !== undefined) {
+              // 处理内容（可能是 JSON 对象或普通文本）
               const currentContent = chatStore.messages[chatStore.messages.length - 1].content
-              chatStore.updateLastMessage(currentContent + data.content)
-              scrollToBottom()
-            }
+
+              if (data.type === 'thinking') {
+                // 思考过程消息（灰色，可展开）
+                chatStore.addMessage({
+                  role: 'assistant',
+                  type: 'thinking',
+                  content: data.content || '正在思考...',
+                  timestamp: new Date(),
+                  isStreaming: false,
+                  expandable: true
+                }, false)
+              } else if (typeof data.content === 'string') {
+                // 普通文本内容（可能是思考过程的一部分）
+                chatStore.updateLastMessage(currentContent + data.content)
+                scrollToBottom()
+              } else if (data.content && data.content.content) {
+                // JSON 格式的最终答复内容
+                chatStore.addMessage({
+                  role: 'assistant',
+                  type: 'final',
+                  content: data.content.content,
+                  timestamp: new Date(),
+                  isStreaming: false
+                }, false)
+              }
           } catch (e) {
             console.error('解析SSE失败:', e, line)
           }

@@ -514,8 +514,15 @@ class SecOpsAgent:
                     return
             else:
                 # 没有工具调用
-                # 如果有内容，先输出
+                # 如果有内容，先输出思考过程（灰色小字）
                 if message.content:
+                    # 先输出思考过程标记
+                    yield json.dumps({
+                        "type": "thinking",
+                        "content": "正在思考...",
+                        "expandable": True
+                    })
+                    # 然后输出实际内容
                     full_response += message.content
                     yield message.content
                 

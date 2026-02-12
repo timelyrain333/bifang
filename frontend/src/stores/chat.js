@@ -276,7 +276,9 @@ const addMessage = async (message, saveToDb = true) => {
       state.messages[msgIndex] = {
         ...state.messages[msgIndex],
         id: newMessage.id,
-        timestamp: newMessage.timestamp
+        timestamp: newMessage.timestamp,
+        type: message.type || undefined,  // 新增：支持消息类型
+        expandable: message.expandable || false  // 新增：支持可展开
       }
     }
 
@@ -286,7 +288,7 @@ const addMessage = async (message, saveToDb = true) => {
       session.updated_at = new Date().toISOString()
     }
 
-    return newMessage
+    return tempMessage
   } catch (error) {
     console.error('发送消息失败:', error)
     throw error
