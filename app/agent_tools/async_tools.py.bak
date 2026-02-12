@@ -1,0 +1,329 @@
+"""
+异步工具包装器
+支持 async generator 中间进度推送
+"""
+import asyncio
+import logging
+from typing import Dict, Any, Optional, AsyncGenerator, Callable
+from langchain.tools import StructuredTool
+from langchain_core.tools import Tool
+
+logger = logging.getLogger(__name__)
+
+
+class AsyncProgressiveTool(StructuredTool):
+    """
+    异步渐进式工具基类
+    
+    特点：
+    1. 支持 async generator yield 中间进度
+    2. 自动 SSE 推送
+    3. 与 LangGraph 完美集成
+    """
+    
+    name: str = "async_progressive_tool"
+    description: str = "异步渐进式工具基类"
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+    
+    async def _arun_with_progress(
+        self,
+        *args,
+        progress_callback: Optional[Callable[[int, str], None]] = None,
+        **kwargs
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        带进度推送的异步执行
+        
+        Args:
+            *args: 位置参数
+            progress_callback: 进度回调函数 (progress, message) -> None
+            **kwargs: 关键字参数
+            
+        Yields:
+            Dict: {"type": "progress|result|error", "data": Any}
+        """
+        raise NotImplementedError("子类必须实现此方法")
+    
+    async def _arun(self, *args, **kwargs) -> Dict[str, Any]:
+        """
+        标准 LangChain 工具接口（无进度）
+        """
+        # 收集所有 yield 的结果
+        results = []
+        async for chunk in self._arun_with_progress(*args, **kwargs):
+            results.append(chunk)
+        
+        # 返回最终结果
+        return {
+            "success": True,
+            "chunks": results,
+            "final_result": results[-1] if results else None
+        }
+
+
+class AsyncHexStrikeScanner(AsyncProgressiveTool):
+    """
+    异步 HexStrike 扫描工具（支持中间进度推送）
+    """
+    
+    name = "async_hexstrike_scan"
+    description = """异步分阶段安全扫描：
+    
+    阶段1: Ping + 主机存活检测（秒级）- 立即返回
+    阶段2: 快速端口扫描（10-30秒）- 立即返回
+    阶段3: 完整扫描（分钟级）- 后台执行，可轮询
+    
+    参数：
+    - target: 要扫描的目标（IP/域名）
+    - user_id: 用户ID（可选）
+    
+    返回：分阶段结果 + 后台任务ID
+    """
+    
+    def __init__(self):
+        super().__init__()
+        from pydantic import BaseModel, Field
+        from typing import Optional
+        
+        class ScanArgs(BaseModel):
+            target: str = Field(..., description="要扫描的目标（IP地址或域名）")
+            user_id: Optional[str] = Field(None, description="用户ID（可选）")
+        
+        self.args_schema = ScanArgs
+    
+    async def _arun_with_progress(
+        self,
+        target: str,
+        user_id: Optional[str] = None,
+        progress_callback: Optional[Callable] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        执行分阶段扫描（带进度推送）
+        """
+        from app.utils.sse_manager import SSEManager
+        
+        sse = SSEManager(f"user_{user_id}" if user_id else "scan_progress")
+        
+        # ========== 阶段1: Ping ==========
+        yield {
+            "type": "stage_start",
+            "stage": "ping",
+            "message": f"📡 正在 Ping 目标主机 {target}..."
+        }
+        if progress_callback:
+            progress_callback(10, "Ping 目标")
+        
+        ping_result = await self._ping_target(target)
+        
+        if not ping_result["alive"]:
+            yield {
+                "type": "error",
+                "error": f"主机 {target} 无响应"
+            }
+            return
+        
+        yield {
+            "type": "stage_complete",
+            "stage": "ping",
+            "result": ping_result,
+            "message": f"✅ 主机存活: {target}"
+        }
+        if progress_callback:
+            progress_callback(20, "Ping 完成")
+        
+        # ========== 阶段2: 快速扫描 ==========
+        yield {
+            "type": "stage_start",
+            "stage": "quick_scan",
+            "message": f"🔍 正在执行快速端口扫描（Top 100）..."
+        }
+        if progress_callback:
+            progress_callback(30, "开始快速扫描")
+        
+        quick_scan_result = await self._quick_port_scan(target, sse)
+        
+        open_ports = len(quick_scan_result.get("ports", []))
+        yield {
+            "type": "stage_complete",
+            "stage": "quick_scan",
+            "result": quick_scan_result,
+            "message": f"✅ 快速扫描完成：发现 {open_ports} 个开放端口"
+        }
+        if progress_callback:
+            progress_callback(60, f"快速扫描完成，发现 {open_ports} 个端口")
+        
+        # ========== 阶段3: 创建后台任务 ==========
+        import uuid
+        task_id = str(uuid.uuid4())
+        
+        yield {
+            "type": "background_task_created",
+            "task_id": task_id,
+            "stage": "full_scan",
+            "message": f"🚀 已启动后台完整扫描 (任务ID: {task_id})"
+        }
+        if progress_callback:
+            progress_callback(70, "后台扫描已启动")
+        
+        # 创建后台扫描协程
+        async def full_scan_coro():
+            """后台完整扫描协程"""
+            try:
+                from app.services.hexstrike_client import HexStrikeClient
+                from django.conf import settings
+                
+                client = HexStrikeClient(
+                    base_url=getattr(settings, 'HEXSTRIKE_SERVER_URL', 'http://localhost:8888'),
+                    timeout=600,
+                )
+                
+                # Nmap 完整扫描
+                sse.send_progress("nmap", 75, "正在执行 Nmap 完整扫描...")
+                nmap_result = client.run_command("nmap_scan", {
+                    "target": target,
+                    "-sV": True,
+                    "-O": True,
+                })
+                
+                # Nuclei 漏洞扫描
+                sse.send_progress("nuclei", 85, "正在执行 Nuclei 漏洞扫描...")
+                nuclei_result = client.run_command("nuclei_scan", {
+                    "target": target,
+                    "severity": "critical,high,medium",
+                })
+                
+                # 生成 PDF 报告
+                sse.send_progress("report", 95, "正在生成 PDF 报告...")
+                from app.services.hexstrike_pdf_reporter import HexStrikePDFReporter
+                reporter = HexStrikePDFReporter()
+                pdf_file = reporter.generate_pdf_report(
+                    target=target,
+                    nmap_results=nmap_result.get("data"),
+                    nuclei_results=nuclei_result.get("data"),
+                )
+                
+                sse.send_progress("complete", 100, "✅ 完整扫描完成！")
+                
+                return {
+                    "success": True,
+                    "nmap": nmap_result.get("data"),
+                    "nuclei": nuclei_result.get("data"),
+                    "pdf_file": pdf_file,
+                }
+                
+            except Exception as e:
+                logger.error(f"[full_scan_coro] 扫描失败: {e}", exc_info=True)
+                sse.send_error(f"扫描失败: {str(e)}", "full_scan")
+                return {"success": False, "error": str(e)}
+        
+        # 注册到任务管理器
+        from app.agent_graphs.security_scan_graph import async_task_manager
+        async_task_manager.create_task(full_scan_coro(), task_id, "full_scan")
+        
+        # 返回结果
+        yield {
+            "type": "complete",
+            "task_id": task_id,
+            "quick_scan_result": quick_scan_result,
+            "final_message": f"✅ 快速评估完成，后台扫描已启动 (任务ID: {task_id})"
+        }
+        if progress_callback:
+            progress_callback(100, "所有阶段完成")
+    
+    async def _ping_target(self, target: str) -> Dict[str, Any]:
+        """Ping 目标主机"""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ping", "-c", "1", "-W", "3", target,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            
+            return {
+                "alive": proc.returncode == 0,
+                "output": stdout.decode(),
+                "target": target
+            }
+        except Exception as e:
+            logger.error(f"[ping_target] 失败: {e}")
+            return {"alive": False, "output": str(e), "target": target}
+    
+    async def _quick_port_scan(
+        self,
+        target: str,
+        sse
+    ) -> Dict[str, Any]:
+        """快速端口扫描"""
+        import time
+        start_time = time.time()
+        
+        # 尝试使用 HexStrike
+        try:
+            from app.services.hexstrike_client import HexStrikeClient
+            from django.conf import settings
+            
+            client = HexStrikeClient(
+                base_url=getattr(settings, 'HEXSTRIKE_SERVER_URL', 'http://localhost:8888'),
+                timeout=60,
+            )
+            
+            nmap_result = client.run_command("nmap_scan", {
+                "target": target,
+                "-F": True,
+                "-T4": True,
+            })
+            
+            if nmap_result.get("success"):
+                ports = self._parse_nmap_ports(nmap_result["data"].get("stdout", ""))
+                return {
+                    "ports": ports,
+                    "scan_time": time.time() - start_time,
+                    "raw_output": nmap_result["data"].get("stdout", "")
+                }
+        except Exception as e:
+            logger.warning(f"HexStrike 快速扫描失败: {e}，使用本地 nmap")
+        
+        # 回退到本地 nmap
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "nmap", "-F", "-T4", "-oX", "-", target,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+            
+            ports = self._parse_nmap_ports(stdout.decode())
+            return {
+                "ports": ports,
+                "scan_time": time.time() - start_time,
+                "raw_output": stdout.decode()
+            }
+        except Exception as e:
+            logger.error(f"本地 nmap 失败: {e}")
+            return {"ports": [], "scan_time": 0, "error": str(e)}
+    
+    def _parse_nmap_ports(self, stdout: str) -> list:
+        """解析 nmap 端口"""
+        import re
+        ports = []
+        pattern = re.compile(r'portid="(\d+)".*?state="(\w+)"')
+        
+        for match in pattern.finditer(stdout):
+            port_num = match.group(1)
+            state = match.group(2)
+            
+            if state == "open":
+                ports.append({
+                    "port": port_num,
+                    "protocol": "tcp",
+                    "state": state
+                })
+        
+        return ports
+
+
+# 工具实例
+async_hexstrike_scan_tool = AsyncHexStrikeScanner()

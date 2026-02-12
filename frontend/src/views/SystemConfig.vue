@@ -331,6 +331,26 @@
             <el-switch v-model="formData.dingtalk_use_stream_push" />
             <div class="form-help">使用流式推送方式接收事件，无需公网地址（推荐）</div>
           </el-form-item>
+          <el-divider content-position="left">流式AI卡片配置（打字机效果）</el-divider>
+          <el-form-item label="启用流式AI卡片" prop="dingtalk_enable_stream_card">
+            <el-switch v-model="formData.dingtalk_enable_stream_card" />
+            <div class="form-help">
+              启用后，机器人回复将以打字机效果逐字显示，提升交互体验。
+              <strong>需要先在钉钉开放平台创建AI卡片模板。</strong>
+            </div>
+          </el-form-item>
+          <el-form-item label="AI卡片模板ID" prop="dingtalk_ai_card_template_id" v-if="formData.dingtalk_enable_stream_card">
+            <el-input
+              v-model="formData.dingtalk_ai_card_template_id"
+              placeholder="请输入AI卡片模板ID，例如：dingtalk_card_xxxxx"
+              style="width: 100%"
+            />
+            <div class="form-help">
+              在钉钉开放平台创建AI卡片模板后获取。
+              <a href="https://open.dingtalk.com/document/development/ai-card-template" target="_blank" style="color: #409EFF">查看文档</a>
+              <a href="#" @click.prevent="showAiCardHelp" style="color: #409EFF; margin-left: 10px">配置帮助</a>
+            </div>
+          </el-form-item>
           <el-form-item label="启用钉钉通知" prop="dingtalk_enabled">
             <el-switch v-model="formData.dingtalk_enabled" />
           </el-form-item>
@@ -481,6 +501,8 @@ export default {
       dingtalk_client_id: '',
       dingtalk_client_secret: '',
       dingtalk_use_stream_push: false,
+      dingtalk_enable_stream_card: false,
+      dingtalk_ai_card_template_id: '',
       dingtalk_enabled: false,
       feishu_webhook: '',
       feishu_secret: '',
@@ -632,6 +654,8 @@ export default {
         dingtalk_client_id: row.dingtalk_client_id || '',
         dingtalk_client_secret: '', // 不显示已加密的Secret
         dingtalk_use_stream_push: row.dingtalk_use_stream_push || false,
+        dingtalk_enable_stream_card: row.dingtalk_enable_stream_card || false,
+        dingtalk_ai_card_template_id: row.dingtalk_ai_card_template_id || '',
         dingtalk_enabled: row.dingtalk_enabled || false,
         feishu_webhook: row.feishu_webhook || '',
         feishu_secret: '', // 不显示已加密的Secret
@@ -688,6 +712,8 @@ export default {
           dingtalk_client_id: '',
           dingtalk_client_secret: '',
           dingtalk_use_stream_push: false,
+          dingtalk_enable_stream_card: false,
+          dingtalk_ai_card_template_id: '',
           dingtalk_enabled: false,
           api_endpoint: '',
           access_key_id: '',

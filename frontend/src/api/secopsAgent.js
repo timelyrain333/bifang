@@ -8,13 +8,13 @@ export const secopsAgentApi = {
       credentials: 'include'
     }).then(res => res.json())
   },
-  // 与智能体对话（流式）
+  // 与智能体对话（流式）- 使用新的SSE endpoint
   chat(message, history = []) {
-    return fetch('/api/secops-agent/chat/', {
+    // 使用POST方式避免URL太长（HTTP 431错误）
+    return fetch('/api/chat/stream', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-CSRFToken': this.getCsrfToken()
       },
       credentials: 'include',
       body: JSON.stringify({
