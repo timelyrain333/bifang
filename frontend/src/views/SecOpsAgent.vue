@@ -39,8 +39,7 @@
               <div
                 :class="['message-content', { 'streaming': msg.isStreaming, 'content-thinking': msg.type === 'thinking', 'content-final': msg.type === 'final' }]"
               >
-                <div v-if="msg.type === 'thinking'" class="thinking-expand" @click="msg.expandable = !msg.expandable">
-                  <span class="expand-icon">{{ msg.expandable ? '▼' : '▶' }}</span>
+                <div v-if="msg.type === 'thinking'" class="thinking-expand" @click="toggleThinkingExpand(msg)">
                 </div>
                 <div v-html="formatMessage(msg.content)"></div>
               </div>
@@ -230,6 +229,13 @@ const handleInput = () => {
   inputRows.value = Math.min(Math.max(lines, 3), 10)
 }
 
+// 切换思考过程展开状态
+const toggleThinkingExpand = (msg) => {
+  if (msg.expandable !== undefined) {
+    msg.expandable = !msg.expandable
+  }
+}
+
 // 使用建议
 const useSuggestion = (text) => {
   inputMessage.value = text
@@ -237,6 +243,7 @@ const useSuggestion = (text) => {
 }
 
 // 发送消息
+const sendMessage = async () => {
 const sendMessage = async () => {
   const message = inputMessage.value.trim()
   if (!message || chatStore.isLoading) return
@@ -342,7 +349,7 @@ const sendMessage = async () => {
                 scrollToBottom()
               } else if (data.content && data.content.content) {
                 // JSON 格式的最终答复内容
-                chatStore.addMessage({
+                await chatStore.addMessage({
                   role: 'assistant',
                   type: 'final',
                   content: data.content.content,
