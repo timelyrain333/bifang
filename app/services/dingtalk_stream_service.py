@@ -2,6 +2,7 @@
 钉钉Stream推送服务
 使用钉钉官方SDK建立WebSocket长连接，接收事件推送
 
+
 常见问题：
 1. SOCKS 代理：若环境变量设置了 socks5:// 等代理，连接可能失败。
    解决：启动前清除代理变量，或使用 start.sh（已自动清除）。
@@ -19,6 +20,7 @@ import threading
 import asyncio
 import requests
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -54,6 +56,54 @@ _services = {}
 
 # AccessToken缓存 {config_id: {'token': str, 'expires_at': float}}
 _access_token_cache = {}
+
+
+def get_real_user_id(access_token: str, sender_id: str) -> Optional[str]:
+    """
+    获取真实的钉钉用户 unionId
+
+    根据临时 sender_id 获取真实的用户 unionId
+
+    Args:
+        access_token: 钉钉AccessToken
+        sender_id: 消息发送者ID（临时格式）
+
+    Returns:
+        str: 真实的 unionId，失败返回 None
+    """
+    try:
+        # 尝试通过 getMemberInfo 接口获取群成员真实 unionId
+        # 如果 sender_id 已经是真实 unionId，直接返回
+        if not sender_id.startswith('$:'):
+            return sender_id
+
+        # 尝试调用用户信息 API
+        # 注意：这需要机器人有获取用户信息的权限
+        url = f"https://api.dingtalk.com/v1.0/contact/users/{sender_id}"
+
+        headers = {
+            'x-acs-dingtalk-access-token': access_token
+        }
+
+        response = requests.get(url, headers=headers, timeout=10)
+
+        if response.status_code == 200:
+            result = response.json()
+            # 检查返回结果中是否包含 unionId
+            if 'unionId' in result:
+                return result['unionId']
+            elif 'result' in result and 'unionId' in result['result']:
+                return result['result']['unionId']
+
+        # 如果 API 调用失败，尝试直接使用 sender_id
+        # 某些情况下 sender_id 可能已经是有效 ID
+        logger.warning(f"无法获取真实 unionId，尝试使用 sender_id: {sender_id}")
+        return sender_id
+
+    except Exception as e:
+        logger.error(f"获取真实 unionId 异常: {e}", exc_info=True)
+        # 失败时返回原始 sender_id
+        return sender_id
 
 
 def get_dingtalk_access_token(client_id: str, client_secret: str) -> Optional[str]:
@@ -182,6 +232,7 @@ class DingTalkStreamChatbotHandler(dingtalk_stream.AsyncChatbotHandler):
         self._access_token = None
         self._access_token_expires_at = 0
         self.conversation_service = None  # 统一对话服务
+        self.client = None  # DingTalkStreamClient 实例（在注册时设置）
 
         if logger:
             self.logger = logger
@@ -467,35 +518,298 @@ class DingTalkStreamChatbotHandler(dingtalk_stream.AsyncChatbotHandler):
             if has_security_intent and hexstrike_target and getattr(django_settings, 'HEXSTRIKE_ENABLED', True) and self.conversation_service:
                 _dingtalk_hexstrike_debug(f"HEXSTRIKE_DIRECT_CALL target={hexstrike_target}")
                 self.logger.info("钉钉：检测到安全评估意图，使用统一对话服务调用 HexStrike: target=%s", hexstrike_target)
-                try:
-                    # 使用统一对话服务调用 HexStrike
-                    tool_result = self.conversation_service.call_hexstrike_analyze(
-                        target=hexstrike_target,
-                        analysis_type='comprehensive',
-                        user_id=user_id
-                    )
 
-                    # 使用统一对话服务格式化响应（非流式）
-                    response = self.conversation_service.format_hexstrike_response_simple(
-                        target=hexstrike_target,
-                        result=tool_result,
-                        include_html_report=True
-                    )
+                # 重新从数据库加载最新配置（避免使用缓存的旧配置）
+                self.config.refresh_from_db()
 
-                    self.conversation_history[user_id].append({'role': 'assistant', 'content': response})
-                    if len(self.conversation_history[user_id]) > 40:
-                        self.conversation_history[user_id] = self.conversation_history[user_id][-40:]
-                    self.reply_text(response, incoming_message)
-                    self.logger.info("钉钉：HexStrike 安全评估已回复, target=%s", hexstrike_target)
-                    _dingtalk_hexstrike_debug("HexStrike 调用成功并已回复")
-                except Exception as e:
-                    self.logger.error("钉钉：HexStrike 调用异常: %s", e, exc_info=True)
-                    _dingtalk_hexstrike_debug(f"HexStrike 调用异常: {e}")
-                    self.reply_text(f"### ❌ HexStrike 调用异常: {str(e)}\n\n", incoming_message)
-                if message_id:
-                    self.processing_messages.discard(message_id)
-                _dingtalk_hexstrike_debug("HexStrike 直接调用分支结束")
-                return dingtalk_stream.AckMessage.STATUS_OK, 'OK'
+                # 检查是否启用了流式AI卡片功能
+                enable_stream_card = getattr(self.config, 'dingtalk_enable_stream_card', False)
+                card_template_id = getattr(self.config, 'dingtalk_ai_card_template_id', None)
+
+                _dingtalk_hexstrike_debug(f"流式卡片配置检查: enable_stream_card={enable_stream_card}, card_template_id={card_template_id!r}, open_conversation_id={open_conversation_id!r}")
+
+                if enable_stream_card and card_template_id and open_conversation_id:
+                    # 使用流式AI卡片回复HexStrike结果
+                    self.logger.info(f"HexStrike: 使用流式AI卡片回复: template_id={card_template_id}")
+
+                    # 在新线程中处理流式卡片（避免阻塞消息处理）
+                    def stream_hexstrike_card():
+                        try:
+                            # 获取AccessToken
+                            access_token = self._get_access_token()
+                            if not access_token:
+                                error_msg = "无法获取AccessToken"
+                                self.logger.error(error_msg)
+                                _dingtalk_hexstrike_debug(error_msg)
+                                fallback_response = f"❌ {error_msg}"
+                                self.reply_text(fallback_response, incoming_message)
+                                return
+
+                            # 初始卡片数据
+                            import json
+                            card_data = {
+                                "content": f"🔍 正在对 **{hexstrike_target}** 进行安全评估...\n\n请稍候，这可能需要几十秒时间。"
+                            }
+
+                            # 使用新版SDK发送AI卡片（之前成功过）
+                            _dingtalk_hexstrike_debug(f"发送AI卡片SDK请求: template_id={card_template_id}, card_data={card_data}")
+                            self.logger.info(f"开始发送AI卡片SDK请求: template_id={card_template_id}")
+
+                            # 获取会话类型（从外部作用域获取conversation_type）
+                            # conversation_type: '1'=单聊, '2'=群聊
+                            card_conversation_type = int(conversation_type) if conversation_type else 2  # 默认为群聊
+                            
+                            # 生成outTrackId
+                            out_track_id = str(uuid.uuid4())
+                            
+                            try:
+                                # 使用 im_1_0 SDK 发送卡片（不需要真实 unionId）
+                                # 流式更新通过 HTTP API 实现
+
+                                # 导入SDK
+                                from alibabacloud_dingtalk.im_1_0 import models as dingtalk_im_models
+                                from alibabacloud_tea_openapi import models as open_api_models
+                                from alibabacloud_dingtalk.im_1_0.client import Client as ImClient
+                                from alibabacloud_tea_util import models as util_models
+
+                                # 创建SDK客户端
+                                config = open_api_models.Config()
+                                config.protocol = 'https'
+                                config.region_id = 'central'
+
+                                im_client = ImClient(config)
+
+                                # 转换卡片数据为字符串格式
+                                def convert_json_values_to_string(obj):
+                                    result = {}
+                                    for key, value in obj.items():
+                                        if isinstance(value, str):
+                                            result[key] = value
+                                        else:
+                                            try:
+                                                result[key] = json.dumps(value, ensure_ascii=False)
+                                            except (TypeError, ValueError):
+                                                result[key] = ""
+                                    return result
+
+                                card_param_map_str = convert_json_values_to_string(card_data)
+
+                                # 构建请求
+                                send_request = dingtalk_im_models.SendInteractiveCardRequest(
+                                    card_template_id=card_template_id,
+                                    open_conversation_id=open_conversation_id,
+                                    card_data=dingtalk_im_models.SendInteractiveCardRequestCardData(
+                                        card_param_map=card_param_map_str
+                                    ),
+                                    robot_code=self.config.dingtalk_client_id,
+                                    out_track_id=out_track_id,
+                                    conversation_type=card_conversation_type
+                                )
+
+                                # 构建请求头
+                                headers = dingtalk_im_models.SendInteractiveCardHeaders()
+                                headers.x_acs_dingtalk_access_token = access_token
+
+                                # 构建运行时选项
+                                runtime = util_models.RuntimeOptions()
+
+                                _dingtalk_hexstrike_debug(f"im_1_0 SDK发送卡片: template_id={card_template_id}, out_track_id={out_track_id}")
+
+                                # 调用SDK
+                                response = im_client.send_interactive_card_with_options(send_request, headers, runtime)
+                                
+                                # 解析响应
+                                if hasattr(response, 'body') and hasattr(response.body, 'result'):
+                                    result = response.body.result
+                                    if hasattr(result, 'process_query_key'):
+                                        process_query_key = result.process_query_key
+                                    else:
+                                        # 尝试从字典获取
+                                        result_dict = result.to_map() if hasattr(result, 'to_map') else {}
+                                        process_query_key = result_dict.get('processQueryKey') or result_dict.get('process_query_key')
+                                else:
+                                    # 尝试从response直接获取
+                                    response_dict = response.to_map() if hasattr(response, 'to_map') else {}
+                                    body = response_dict.get('body', {})
+                                    result = body.get('result', {}) if isinstance(body, dict) else {}
+                                    process_query_key = result.get('processQueryKey') or result.get('process_query_key')
+                                
+                                if process_query_key:
+                                    _dingtalk_hexstrike_debug(f"AI卡片SDK发送成功: processQueryKey={process_query_key}")
+                                else:
+                                    error_detail = f"SDK响应未包含processQueryKey: {response}"
+                                    self.logger.error(error_detail)
+                                    _dingtalk_hexstrike_debug(error_detail)
+                                    fallback_response = f"❌ 发送AI卡片失败\n\n{error_detail}\n\n请检查：\n1. 卡片模板ID是否正确\n2. 卡片模板是否已发布\n3. 应用是否有发送卡片权限"
+                                    self.reply_text(fallback_response, incoming_message)
+                                    return
+
+                            except ImportError as e:
+                                error_msg = f"SDK导入失败: {str(e)}\n\n请安装: pip install alibabacloud_dingtalk"
+                                self.logger.error(error_msg, exc_info=True)
+                                _dingtalk_hexstrike_debug(error_msg)
+                                fallback_response = f"❌ {error_msg}"
+                                self.reply_text(fallback_response, incoming_message)
+                                return
+                            except Exception as e:
+                                error_msg = f"SDK请求异常: {str(e)}"
+                                self.logger.error(error_msg, exc_info=True)
+                                _dingtalk_hexstrike_debug(error_msg)
+                                fallback_response = f"❌ {error_msg}"
+                                self.reply_text(fallback_response, incoming_message)
+                                return
+
+                            if not process_query_key:
+                                error_msg = "processQueryKey为空"
+                                self.logger.error(error_msg)
+                                _dingtalk_hexstrike_debug(error_msg)
+                                fallback_response = f"❌ {error_msg}\n\nAPI响应未返回processQueryKey"
+                                self.reply_text(fallback_response, incoming_message)
+                                return
+
+                            _dingtalk_hexstrike_debug(f"AI卡片已发送: processQueryKey={process_query_key}")
+
+                            # 调用HexStrike
+                            try:
+                                _dingtalk_hexstrike_debug(f"准备调用HexStrike: target={hexstrike_target}, user_id={user_id}")
+                                self.logger.info(f"准备调用HexStrike: target={hexstrike_target}")
+
+                                import sys
+                                import traceback
+
+                                try:
+                                    tool_result = self.conversation_service.call_hexstrike_analyze(
+                                        target=hexstrike_target,
+                                        analysis_type='comprehensive',
+                                        user_id=user_id
+                                    )
+                                    _dingtalk_hexstrike_debug(f"HexStrike调用返回: success={tool_result.get('success')}")
+                                except Exception as hexstrike_error:
+                                    _dingtalk_hexstrike_debug(f"HexStrike调用异常: {str(hexstrike_error)}\n{traceback.format_exc()}")
+                                    raise
+
+                                _dingtalk_hexstrike_debug(f"HexStrike调用完成: success={tool_result.get('success')}")
+                                self.logger.info(f"HexStrike调用完成: success={tool_result.get('success')}")
+
+                                # 格式化响应
+                                response = self.conversation_service.format_hexstrike_response_simple(
+                                    target=hexstrike_target,
+                                    result=tool_result,
+                                    include_html_report=True
+                                )
+
+                                # 使用流式更新卡片内容
+                                _dingtalk_hexstrike_debug(f"开始流式更新卡片: {len(response)} 字符")
+
+                                # 转换卡片数据
+                                update_card_data = {
+                                    "content": response  # 完整内容
+                                }
+                                card_param_map_str = convert_json_values_to_string(update_card_data)
+
+                                # 使用 im_1_0 SDK 的更新 API
+                                # POST /v1.0/im/interactiveCards/update
+                                update_url = "https://api.dingtalk.com/v1.0/im/interactiveCards/update"
+                                update_payload = {
+                                    "processQueryKey": process_query_key,
+                                    "cardData": {
+                                        "cardParamMap": card_param_map_str
+                                    }
+                                }
+                                update_headers = {
+                                    'Content-Type': 'application/json',
+                                    'x-acs-dingtalk-access-token': access_token
+                                }
+
+                                update_response = requests.post(
+                                    update_url,
+                                    headers=update_headers,
+                                    json=update_payload,
+                                    timeout=10
+                                )
+
+                                _dingtalk_hexstrike_debug(f"流式更新完成: status={update_response.status_code}, response={update_response.text[:200] if update_response.text else 'empty'}")
+                                self.logger.info(f"HexStrike: AI卡片流式更新完成, target={hexstrike_target}")
+
+                                # 添加到历史
+                                self.conversation_history[user_id].append({'role': 'assistant', 'content': response})
+                                if len(self.conversation_history[user_id]) > 40:
+                                    self.conversation_history[user_id] = self.conversation_history[user_id][-40:]
+
+                            except Exception as e:
+                                self.logger.error("HexStrike: 调用异常: %s", e, exc_info=True)
+                                _dingtalk_hexstrike_debug(f"HexStrike 调用异常: {e}")
+
+                                # 标记卡片为失败状态（使用相同的格式）
+                                error_msg = f"### ❌ HexStrike 调用异常\n\n{str(e)}"
+                                update_url = "https://api.dingtalk.com/v1.0/im/interactiveCards/update"
+                                error_card_data = {"content": error_msg}
+                                error_card_param_map = convert_json_values_to_string(error_card_data)
+                                update_payload = {
+                                    "processQueryKey": process_query_key,
+                                    "cardData": {
+                                        "cardParamMap": error_card_param_map
+                                    }
+                                }
+                                try:
+                                    error_headers = {
+                                        'Content-Type': 'application/json',
+                                        'x-acs-dingtalk-access-token': access_token
+                                    }
+                                    requests.post(update_url, headers=error_headers, json=update_payload, timeout=10)
+                                except:
+                                    pass  # 忽略更新失败
+
+                        except Exception as e:
+                            self.logger.error(f"HexStrike: 流式卡片处理异常: {e}", exc_info=True)
+                            _dingtalk_hexstrike_debug(f"HexStrike 流式卡片异常: {e}")
+                            # 回退到普通回复
+                            try:
+                                error_response = f"### ❌ HexStrike 调用异常: {str(e)}\n\n"
+                                self.reply_text(error_response, incoming_message)
+                            except Exception as e2:
+                                self.logger.error(f"HexStrike: 回退回复也失败: {e2}", exc_info=True)
+
+                    # 启动线程处理流式卡片
+                    thread = threading.Thread(target=stream_hexstrike_card, daemon=True)
+                    thread.start()
+
+                    if message_id:
+                        self.processing_messages.discard(message_id)
+                    _dingtalk_hexstrike_debug("HexStrike 流式AI卡片分支结束")
+                    return dingtalk_stream.AckMessage.STATUS_OK, 'OK'
+
+                else:
+                    # 使用普通回复方式（原有逻辑）
+                    try:
+                        # 使用统一对话服务调用 HexStrike
+                        tool_result = self.conversation_service.call_hexstrike_analyze(
+                            target=hexstrike_target,
+                            analysis_type='comprehensive',
+                            user_id=user_id
+                        )
+
+                        # 使用统一对话服务格式化响应（非流式）
+                        response = self.conversation_service.format_hexstrike_response_simple(
+                            target=hexstrike_target,
+                            result=tool_result,
+                            include_html_report=True
+                        )
+
+                        self.conversation_history[user_id].append({'role': 'assistant', 'content': response})
+                        if len(self.conversation_history[user_id]) > 40:
+                            self.conversation_history[user_id] = self.conversation_history[user_id][-40:]
+                        self.reply_text(response, incoming_message)
+                        self.logger.info("钉钉：HexStrike 安全评估已回复, target=%s", hexstrike_target)
+                        _dingtalk_hexstrike_debug("HexStrike 调用成功并已回复")
+                    except Exception as e:
+                        self.logger.error("钉钉：HexStrike 调用异常: %s", e, exc_info=True)
+                        _dingtalk_hexstrike_debug(f"HexStrike 调用异常: {e}")
+                        self.reply_text(f"### ❌ HexStrike 调用异常: {str(e)}\n\n", incoming_message)
+                    if message_id:
+                        self.processing_messages.discard(message_id)
+                    _dingtalk_hexstrike_debug("HexStrike 直接调用分支结束")
+                    return dingtalk_stream.AckMessage.STATUS_OK, 'OK'
             
             # 创建SecOps智能体实例并处理消息
             try:
@@ -503,9 +817,9 @@ class DingTalkStreamChatbotHandler(dingtalk_stream.AsyncChatbotHandler):
                 api_key = self.ai_config.qianwen_api_key
                 api_base = self.ai_config.qianwen_api_base or 'https://dashscope.aliyuncs.com/compatible-mode/v1'
                 model = self.ai_config.qianwen_model or 'qwen-plus'
-                
+
                 agent = SecOpsAgent(api_key, api_base, model)
-                
+
                 # 获取用户对象（用于插件执行时加载AI配置）
                 # 钉钉场景下，使用配置关联的用户或默认用户
                 user = None
@@ -517,32 +831,114 @@ class DingTalkStreamChatbotHandler(dingtalk_stream.AsyncChatbotHandler):
                     # 如果没有关联用户，尝试查找默认用户或使用配置本身
                     # 这种情况下，TaskExecutor会使用配置来查找AI配置
                     pass
-                
-                # chat方法返回生成器，需要收集所有响应
-                # 注意：process方法是同步的，所以直接调用同步方法
-                response_parts = []
-                for part in agent.chat(
-                    user_message=content,
-                    conversation_history=self.conversation_history.get(user_id, []),
-                    user=user
-                ):
-                    response_parts.append(part)
-                response = ''.join(response_parts)
-                
-                # 添加AI回复到历史
-                self.conversation_history[user_id].append({
-                    'role': 'assistant',
-                    'content': response
-                })
-                
-                # 限制历史记录长度（保留最近40条消息，约20轮对话）
-                if len(self.conversation_history[user_id]) > 40:
-                    self.conversation_history[user_id] = self.conversation_history[user_id][-40:]
-                
-                # 回复消息（直接使用SDK的reply_text方法，因为自定义API调用可能权限不足）
-                self.reply_text(response, incoming_message)
-                self.logger.info(f"已回复消息给用户 {user_id}: {response[:50] if len(response) > 50 else response}...")
-                
+
+                # 检查是否启用了流式AI卡片功能
+                enable_stream_card = getattr(self.config, 'dingtalk_enable_stream_card', False)
+                card_template_id = getattr(self.config, 'dingtalk_ai_card_template_id', None)
+
+                if enable_stream_card and card_template_id and open_conversation_id:
+                    # 使用流式AI卡片回复（打字机效果）
+                    self.logger.info(f"使用流式AI卡片回复: template_id={card_template_id}")
+
+                    # 在新线程中处理流式卡片（避免阻塞消息处理）
+                    def stream_card_reply():
+                        try:
+                            from app.services.dingtalk_ai_card import DingTalkAICardStreamer
+
+                            streamer = DingTalkAICardStreamer(
+                                client_id=self.config.dingtalk_client_id,
+                                client_secret=self.config.dingtalk_client_secret
+                            )
+
+                            # 创建文本生成器
+                            def text_generator():
+                                for chunk in agent.chat(
+                                    user_message=content,
+                                    conversation_history=self.conversation_history.get(user_id, []),
+                                    user=user
+                                ):
+                                    yield chunk
+
+                            # 流式回复
+                            success = streamer.stream_reply(
+                                card_template_id=card_template_id,
+                                open_conversation_id=open_conversation_id,
+                                text_stream=text_generator(),
+                                user_id=user_id if conversation_type == '1' else None,
+                                conversation_type=conversation_type,
+                                update_interval=0.05  # 50ms更新一次
+                            )
+
+                            if not success:
+                                self.logger.error("流式卡片回复失败，回退到普通回复")
+                                # 回退到普通回复
+                                response_parts = []
+                                for part in agent.chat(
+                                    user_message=content,
+                                    conversation_history=self.conversation_history.get(user_id, []),
+                                    user=user
+                                ):
+                                    response_parts.append(part)
+                                response = ''.join(response_parts)
+                                self.reply_text(response, incoming_message)
+
+                                # 添加到历史
+                                self.conversation_history[user_id].append({'role': 'assistant', 'content': response})
+                                if len(self.conversation_history[user_id]) > 40:
+                                    self.conversation_history[user_id] = self.conversation_history[user_id][-40:]
+
+                        except Exception as e:
+                            self.logger.error(f"流式卡片回复异常: {e}", exc_info=True)
+                            # 回退到普通回复
+                            try:
+                                response_parts = []
+                                for part in agent.chat(
+                                    user_message=content,
+                                    conversation_history=self.conversation_history.get(user_id, []),
+                                    user=user
+                                ):
+                                    response_parts.append(part)
+                                response = ''.join(response_parts)
+                                self.reply_text(response, incoming_message)
+
+                                # 添加到历史
+                                self.conversation_history[user_id].append({'role': 'assistant', 'content': response})
+                                if len(self.conversation_history[user_id]) > 40:
+                                    self.conversation_history[user_id] = self.conversation_history[user_id][-40:]
+                            except Exception as e2:
+                                self.logger.error(f"回退到普通回复也失败: {e2}", exc_info=True)
+
+                    # 启动线程处理流式卡片
+                    thread = threading.Thread(target=stream_card_reply, daemon=True)
+                    thread.start()
+
+                else:
+                    # 使用普通回复方式
+                    # chat方法返回生成器，需要收集所有响应
+                    # 注意：process方法是同步的，所以直接调用同步方法
+                    response_parts = []
+                    for part in agent.chat(
+                        user_message=content,
+                        conversation_history=self.conversation_history.get(user_id, []),
+                        user=user
+                    ):
+                        response_parts.append(part)
+                    response = ''.join(response_parts)
+
+                    # 添加AI回复到历史
+                    self.conversation_history[user_id].append({
+                        'role': 'assistant',
+                        'content': response
+                    })
+
+                    # 限制历史记录长度（保留最近40条消息，约20轮对话）
+                    if len(self.conversation_history[user_id]) > 40:
+                        self.conversation_history[user_id] = self.conversation_history[user_id][-40:]
+
+                    # 回复消息（直接使用SDK的reply_text方法，因为自定义API调用可能权限不足）
+                    self.reply_text(response, incoming_message)
+                    self.logger.info(f"已回复消息给用户 {user_id}: {response[:50] if len(response) > 50 else response}...")
+
             except Exception as e:
                 self.logger.error(f"处理消息失败: {e}", exc_info=True)
                 error_response = f"❌ 处理消息时发生错误: {str(e)}"
@@ -607,21 +1003,24 @@ class DingTalkStreamService:
             self.config.dingtalk_client_id,
             self.config.dingtalk_client_secret
         )
-        
+
         client = dingtalk_stream.DingTalkStreamClient(credential)
-        
+
         # 注册聊天机器人消息处理器
         handler = DingTalkStreamChatbotHandler(self.config_id, logger)
-        
+
+        # 将client引用传递给handler（用于AICardReplier）
+        handler.client = client
+
         # 注册两个topic：普通消息和代理消息（根据钉钉文档）
         chatbot_topic = dingtalk_stream.chatbot.ChatbotMessage.TOPIC
         delegate_topic = dingtalk_stream.chatbot.ChatbotMessage.DELEGATE_TOPIC
-        
+
         logger.info(f"注册chatbot handler: TOPIC={chatbot_topic}, DELEGATE_TOPIC={delegate_topic}")
-        
+
         client.register_callback_handler(chatbot_topic, handler)
         client.register_callback_handler(delegate_topic, handler)
-        
+
         return client
     
     def _run_in_thread(self):

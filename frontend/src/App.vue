@@ -42,15 +42,15 @@
             <el-sub-menu index="assets">
               <template #title>
                 <el-icon><DataBoard /></el-icon>
-                <span>资产数据</span>
+                <span>资产列表</span>
               </template>
-              <el-menu-item index="/assets/aws">
-                <el-icon><List /></el-icon>
-                <span>AWS</span>
+              <el-menu-item index="/assets/fingerprints">
+                <el-icon style="opacity: 0"><List /></el-icon>
+                <span>主机指纹</span>
               </el-menu-item>
-              <el-menu-item index="/assets/aliyun">
-                <el-icon><List /></el-icon>
-                <span>阿里云</span>
+              <el-menu-item index="/assets/cloud-servers">
+                <el-icon style="opacity: 0"><List /></el-icon>
+                <span>云服务器</span>
               </el-menu-item>
             </el-sub-menu>
             <el-sub-menu index="vulnerability">

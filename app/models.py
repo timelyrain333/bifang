@@ -189,7 +189,11 @@ class AliyunConfig(models.Model):
                                            help_text='钉钉机器人应用的App Secret（用于流式推送，已废弃，建议使用Client Secret）')
     dingtalk_use_stream_push = models.BooleanField(default=False, verbose_name='使用流式推送',
                                                    help_text='使用流式推送方式接收事件，无需公网地址')
-    
+    dingtalk_ai_card_template_id = models.CharField(max_length=100, blank=True, verbose_name='钉钉AI卡片模板ID',
+                                                     help_text='用于流式AI卡片回复的模板ID（在钉钉开发者后台创建）')
+    dingtalk_enable_stream_card = models.BooleanField(default=False, verbose_name='启用流式AI卡片',
+                                                      help_text='是否使用流式AI卡片进行回复（打字机效果）')
+
     # 飞书配置字段
     feishu_webhook = models.URLField(max_length=500, blank=True, verbose_name='飞书机器人Webhook',
                                      help_text='飞书自定义机器人的Webhook地址（用于发送消息）')
@@ -365,3 +369,98 @@ class HexStrikeExecution(models.Model):
     
     def __str__(self):
         return f'{self.target} - {self.started_at}'
+
+
+class ChatSession(models.Model):
+    """
+    聊天会话模型
+    存储用户与 AI 的对话会话
+    """
+    id = models.AutoField(primary_key=True)
+    user = models.ForeignKey(
+        'auth.User',
+        on_delete=models.CASCADE,
+        related_name='chat_sessions',
+        verbose_name='用户'
+    )
+    title = models.CharField(
+        max_length=200,
+        verbose_name='标题',
+        help_text='会话标题，可由用户编辑或AI自动生成'
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True,
+        verbose_name='创建时间'
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        db_index=True,
+        verbose_name='更新时间'
+    )
+    is_active = models.BooleanField(
+        default=False,
+        verbose_name='是否活跃',
+        help_text='标记当前正在使用的会话'
+    )
+
+    class Meta:
+        db_table = 'chat_sessions'
+        verbose_name = '聊天会话'
+        verbose_name_plural = '聊天会话'
+        ordering = ['-updated_at']  # 最近更新的排在前面
+        indexes = [
+            models.Index(fields=['user', '-updated_at']),
+        ]
+
+    def __str__(self):
+        return self.title[:50]
+
+    @property
+    def message_count(self):
+        """消息数量"""
+        return self.messages.count()
+
+
+class ChatMessage(models.Model):
+    """
+    聊天消息模型
+    存储会话中的所有消息
+    """
+    id = models.AutoField(primary_key=True)
+    session = models.ForeignKey(
+        ChatSession,
+        on_delete=models.CASCADE,
+        related_name='messages',
+        verbose_name='会话'
+    )
+    role = models.CharField(
+        max_length=20,
+        choices=[('user', 'user'), ('assistant', 'assistant')],
+        verbose_name='角色'
+    )
+    content = models.TextField(
+        verbose_name='内容',
+        help_text='消息内容，支持长文本'
+    )
+    timestamp = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True,
+        verbose_name='时间戳'
+    )
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name='元数据',
+        help_text='存储tokens、模型等信息'
+    )
+
+    class Meta:
+        db_table = 'chat_messages'
+        verbose_name = '聊天消息'
+        verbose_name_plural = '聊天消息'
+        ordering = ['timestamp']
+
+    def __str__(self):
+        content_preview = self.content[:50]
+        return f"{self.role}: {content_preview}"

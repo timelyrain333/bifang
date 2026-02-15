@@ -2,7 +2,7 @@
 API序列化器
 """
 from rest_framework import serializers
-from .models import Plugin, Task, TaskExecution, Asset, AliyunConfig, AWSConfig, Vulnerability, SecurityAlert
+from .models import Plugin, Task, TaskExecution, Asset, AliyunConfig, AWSConfig, Vulnerability, SecurityAlert, ChatSession, ChatMessage
 
 
 class PluginSerializer(serializers.ModelSerializer):
@@ -92,14 +92,15 @@ class AliyunConfigSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = AliyunConfig
-        fields = ['id', 'name', 'api_endpoint', 'access_key_id', 'access_key_secret', 
+        fields = ['id', 'name', 'api_endpoint', 'access_key_id', 'access_key_secret',
                   'region_id', 'dingtalk_webhook', 'dingtalk_secret', 'dingtalk_enabled',
                   'dingtalk_app_id', 'dingtalk_client_id', 'dingtalk_client_secret',
-                  'dingtalk_use_stream_push',
+                  'dingtalk_use_stream_push', 'dingtalk_ai_card_template_id',
+                  'dingtalk_enable_stream_card',
                   'feishu_webhook', 'feishu_secret', 'feishu_app_id', 'feishu_app_secret',
                   'feishu_enabled', 'feishu_use_long_connection', 'qianwen_config',
                   'qianwen_api_key', 'qianwen_api_base', 'qianwen_model', 'qianwen_enabled',
-                  'has_qianwen_api_key', 'config_type', 'is_default', 'is_active', 'description', 
+                  'has_qianwen_api_key', 'config_type', 'is_default', 'is_active', 'description',
                   'created_at', 'updated_at']
     
     def get_has_qianwen_api_key(self, obj):
@@ -256,10 +257,33 @@ class AWSConfigSerializer(serializers.ModelSerializer):
 class VulnerabilitySerializer(serializers.ModelSerializer):
     """漏洞序列化器"""
     source_url = serializers.URLField(source='url', read_only=True, label='邮件链接')
-    
+
     class Meta:
         model = Vulnerability
         fields = ['id', 'cve_id', 'title', 'description', 'url', 'source_url', 'message_id',
-                 'published_date', 'raw_content', 'content', 'source', 
+                 'published_date', 'raw_content', 'content', 'source',
                  'collected_at', 'updated_at']
         read_only_fields = ['collected_at', 'updated_at']
+
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    """聊天消息序列化器"""
+
+    class Meta:
+        model = ChatMessage
+        fields = ['id', 'session', 'role', 'content', 'timestamp', 'metadata']
+        read_only_fields = ['id', 'timestamp']
+
+
+class ChatSessionSerializer(serializers.ModelSerializer):
+    """聊天会话序列化器"""
+    messages_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ChatSession
+        fields = ['id', 'title', 'created_at', 'updated_at', 'is_active', 'messages_count']
+        read_only_fields = ['created_at', 'updated_at']
+
+    def get_messages_count(self, obj):
+        """获取会话的消息总数"""
+        return obj.message_count

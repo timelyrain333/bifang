@@ -248,3 +248,9 @@ LOGGING = {
 HEXSTRIKE_SERVER_URL = os.environ.get('HEXSTRIKE_SERVER_URL', 'http://localhost:8888')
 HEXSTRIKE_ENABLED = os.environ.get('HEXSTRIKE_ENABLED', 'true').lower() in ('1', 'true', 'yes')
 HEXSTRIKE_TIMEOUT = int(os.environ.get('HEXSTRIKE_TIMEOUT', '600'))  # 10分钟，支持 Nuclei 完整扫描
+
+# 通义千问 API（阿里云 DashScope）
+# 用于 SecOps 智能体和 LangChain 集成
+# 参考: https://help.aliyun.com/zh/dashscope/
+QWEN_API_KEY = os.environ.get('QWEN_API_KEY', '')
+QWEN_MODEL = os.environ.get('QWEN_MODEL', 'qwen-plus')  # 可选: qwen-turbo, qwen-plus, qwen-max

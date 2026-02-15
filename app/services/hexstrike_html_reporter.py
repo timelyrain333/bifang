@@ -311,6 +311,8 @@ class HexStrikeHTMLReporter:
         @media print {{
             .container {{ max-width: 100%; }}
             .section {{ page-break-inside: avoid; }}
+            .header {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+            body {{ background: white; }}
         }}
     </style>
 </head>

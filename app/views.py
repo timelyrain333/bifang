@@ -2190,15 +2190,17 @@ class FeishuBotView(APIView):
 
 
 class HexStrikeReportDownloadView(APIView):
-    """HexStrike 报告下载视图"""
+    """HexStrike 报告下载视图（支持 HTML 和 ZIP 格式）"""
     permission_classes = [AllowAny]  # 报告下载不需要认证，通过链接直接访问
 
     def get(self, request, filename):
         """
-        下载 HexStrike HTML 报告
+        下载 HexStrike 报告（支持 HTML 和 ZIP 格式）
 
         Args:
-            filename: 报告文件名（如：hexstrike_report_101_37_29_229_20260206_123456.html）
+            filename: 报告文件名
+                - HTML: hexstrike_report_101_37_29_229_20260206_123456.html
+                - ZIP: hexstrike_report_101_37_29_229_20260206_123456.zip
         """
         try:
             from pathlib import Path
@@ -2214,8 +2216,9 @@ class HexStrikeReportDownloadView(APIView):
                 logger.warning(f"报告文件不存在: {filename}")
                 raise Http404(f"报告文件不存在: {filename}")
 
-            # 检查文件名格式（安全检查）
-            if not filename.startswith('hexstrike_report_') or not filename.endswith('.html'):
+            # 检查文件名格式（安全检查）- 支持 HTML 和 ZIP
+            valid_extensions = ('.html', '.zip')
+            if not filename.startswith('hexstrike_report_') or not filename.endswith(valid_extensions):
                 logger.warning(f"非法的文件名格式: {filename}")
                 return Response(
                     {'error': '非法的文件名'},
@@ -2226,15 +2229,23 @@ class HexStrikeReportDownloadView(APIView):
             with open(file_path, 'rb') as f:
                 file_content = f.read()
 
+            # 根据文件扩展名设置 content_type
+            if filename.endswith('.zip'):
+                content_type = 'application/zip'
+                disposition = 'attachment'  # ZIP 文件默认下载
+            else:
+                content_type = 'text/html; charset=utf-8'
+                disposition = 'inline'  # HTML 文件可以在浏览器中预览
+
             # 返回文件响应
             response = FileResponse(
                 io.BytesIO(file_content),
-                content_type='text/html; charset=utf-8'
+                content_type=content_type
             )
-            response['Content-Disposition'] = f'inline; filename="{filename}"'
+            response['Content-Disposition'] = f'{disposition}; filename="{filename}"'
             response['Content-Length'] = len(file_content)
 
-            logger.info(f"报告下载成功: {filename}, size={len(file_content)} bytes")
+            logger.info(f"报告下载成功: {filename}, size={len(file_content)} bytes, type={content_type}")
             return response
 
         except Http404:

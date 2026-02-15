@@ -2,9 +2,26 @@
   <div class="asset-list">
     <el-card>
       <template #header>
-        <span>{{ pageTitle }}</span>
+        <div class="card-header">
+          <div class="header-left">
+            <span class="title">主机指纹</span>
+            <el-select
+              v-model="activeCloud"
+              placeholder="选择数据源"
+              style="width: 150px; margin-left: 20px;"
+              @change="handleCloudChange"
+            >
+              <el-option label="阿里云" value="aliyun_security" />
+              <el-option label="AWS" value="aws_inspector" />
+            </el-select>
+          </div>
+          <div class="header-right">
+            <el-button type="primary" @click="handleRefresh" :icon="Refresh">刷新</el-button>
+            <el-button type="success" @click="handleExport" :loading="exporting">导出Excel</el-button>
+          </div>
+        </div>
       </template>
-      
+
       <el-form :inline="true" :model="filters" class="filter-form">
         <el-form-item label="资产类型">
           <el-select 
@@ -62,7 +79,6 @@
         <el-form-item>
           <el-button type="primary" @click="handleQuery" :icon="Search">查询</el-button>
           <el-button @click="resetFilters" :icon="Refresh">重置</el-button>
-          <el-button type="success" @click="handleExport" :loading="exporting">导出Excel</el-button>
         </el-form-item>
       </el-form>
       
@@ -336,8 +352,7 @@
 </template>
 
 <script>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, reactive, onMounted } from 'vue'
 import { Search, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
@@ -345,12 +360,8 @@ import api from '../api'
 export default {
   name: 'AssetList',
   setup() {
-    const route = useRoute()
-    // 根据路由 meta.source 确定当前展示的云：aws_inspector | aliyun_security
-    const cloudSource = computed(() => route.meta.source || 'aliyun_security')
-    const pageTitle = computed(() => {
-      return route.meta.source === 'aws_inspector' ? 'AWS 资产' : '阿里云资产'
-    })
+    // 当前选中的云平台：aws_inspector | aliyun_security
+    const activeCloud = ref('aliyun_security')
     const loading = ref(false)
     const assets = ref([])
     const total = ref(0)
@@ -399,8 +410,8 @@ export default {
         
         // 构建API请求参数
         const params = {}
-        if (cloudSource.value) {
-          params.source = cloudSource.value
+        if (activeCloud.value) {
+          params.source = activeCloud.value
         }
         
         // 如果选择了资产类型，且没有其他筛选条件，可以在后端筛选以提高性能
@@ -558,8 +569,8 @@ export default {
         
         // 构建导出参数（使用与查询相同的筛选条件）
         const params = {}
-        if (cloudSource.value) {
-          params.source = cloudSource.value
+        if (activeCloud.value) {
+          params.source = activeCloud.value
         }
         
         // 添加筛选参数
@@ -915,25 +926,30 @@ export default {
       if (!ip) return false
       return ip.toString().toLowerCase().includes(value.toString().toLowerCase())
     }
-    
-    onMounted(() => {
-      loadAssets()
-    })
-    
-    // 切换云（AWS/阿里云）时重新加载数据
-    watch(() => route.meta.source, () => {
+
+    // 处理云平台切换
+    const handleCloudChange = () => {
       currentPage.value = 1
+      resetFilters()
+    }
+
+    const handleRefresh = () => {
+      loadAssets()
+      ElMessage.success('刷新成功')
+    }
+
+    onMounted(() => {
       loadAssets()
     })
 
     return {
+      activeCloud,
       loading,
       assets,
       total,
       currentPage,
       pageSize,
       filters,
-      pageTitle,
       detailDialogVisible,
       currentAsset,
       serverInfo,
@@ -942,6 +958,8 @@ export default {
       loadAssets,
       handleQuery,
       resetFilters,
+      handleCloudChange,
+      handleRefresh,
       handleExport,
       getAssetTypeName,
       showDetail,
@@ -960,6 +978,27 @@ export default {
 </script>
 
 <style scoped>
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+}
+
+.header-left .title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.header-right {
+  display: flex;
+  gap: 10px;
+}
+
 .filter-form {
   margin-bottom: 20px;
 }

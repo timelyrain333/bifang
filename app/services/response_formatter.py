@@ -227,10 +227,10 @@ class ResponseFormatter:
             yield "## 📊 分析结果\n\n"
             yield f"```json\n{json.dumps(data, ensure_ascii=False, indent=2)}\n```\n\n"
 
-        # 5. 生成 HTML 报告（如果需要）
+        # 5. 生成 ZIP 报告包（如果需要）
         if include_html_report:
             try:
-                report_filename = ResponseFormatter.generate_html_report(
+                report_filename = ResponseFormatter.generate_zip_report(
                     target=target,
                     nmap_results=data.get('nmap_results'),
                     nuclei_results=data.get('nuclei_results'),
@@ -241,9 +241,82 @@ class ResponseFormatter:
                     # 构建下载链接
                     download_url = ResponseFormatter.build_report_download_url(report_filename)
                     yield f"---\n\n"
-                    yield f"📄 **完整报告下载**：[点击下载 HTML 报告]({download_url})\n"
+                    yield f"📦 **完整报告下载**：[点击下载报告包 (HTML + PDF)]({download_url})\n"
             except Exception as e:
-                logger.warning(f"生成 HTML 报告失败: {e}", exc_info=True)
+                logger.warning(f"生成 ZIP 报告失败: {e}", exc_info=True)
+
+    @staticmethod
+    def generate_zip_report(
+        target: str,
+        nmap_results: Optional[Dict] = None,
+        nuclei_results: Optional[Dict] = None,
+        target_profile: Optional[Dict] = None
+    ) -> Optional[str]:
+        """
+        生成 ZIP 格式的报告包（包含 HTML 和 PDF）
+
+        Args:
+            target: 目标地址
+            nmap_results: Nmap 扫描结果
+            nuclei_results: Nuclei 扫描结果
+            target_profile: 目标画像
+
+        Returns:
+            str: ZIP 报告文件名，失败返回 None
+        """
+        try:
+            from app.services.hexstrike_html_reporter import HexStrikeHTMLReporter
+            from app.services.hexstrike_pdf_reporter import HexStrikePDFReporter
+            from app.services.hexstrike_zip_reporter import HexStrikeZipReporter
+
+            # 1. 生成 HTML 报告
+            html_reporter = HexStrikeHTMLReporter()
+            html_filename = html_reporter.generate_report(
+                target=target,
+                nmap_results=nmap_results,
+                nuclei_results=nuclei_results,
+                target_profile=target_profile
+            )
+
+            if not html_filename:
+                logger.error("HTML 报告生成失败")
+                return None
+
+            logger.info(f"HTML 报告已生成: {html_filename}")
+
+            # 2. 生成 PDF 报告
+            pdf_reporter = HexStrikePDFReporter()
+            pdf_filename = pdf_reporter.generate_pdf_report(
+                target=target,
+                nmap_results=nmap_results,
+                nuclei_results=nuclei_results,
+                target_profile=target_profile
+            )
+
+            if pdf_filename:
+                logger.info(f"PDF 报告已生成: {pdf_filename}")
+            else:
+                logger.warning("PDF 报告生成失败，ZIP 包中将只包含 HTML 报告")
+                pdf_filename = None
+
+            # 3. 打包成 ZIP
+            zip_reporter = HexStrikeZipReporter()
+            zip_filename = zip_reporter.create_zip_from_html_and_pdf(
+                target=target,
+                html_filename=html_filename,
+                pdf_filename=pdf_filename
+            )
+
+            if zip_filename:
+                logger.info(f"ZIP 报告包已生成: {zip_filename} (包含 HTML 和 PDF)")
+            else:
+                logger.error("ZIP 报告包生成失败")
+
+            return zip_filename
+
+        except Exception as e:
+            logger.error(f"生成 ZIP 报告失败: {e}", exc_info=True)
+            return None
 
     @staticmethod
     def generate_html_report(
@@ -253,7 +326,7 @@ class ResponseFormatter:
         target_profile: Optional[Dict] = None
     ) -> Optional[str]:
         """
-        生成 HTML 安全评估报告
+        生成 HTML 安全评估报告（保留以兼容旧代码）
 
         Args:
             target: 目标地址
