@@ -276,9 +276,7 @@ const addMessage = async (message, saveToDb = true) => {
       state.messages[msgIndex] = {
         ...state.messages[msgIndex],
         id: newMessage.id,
-        timestamp: newMessage.timestamp,
-        type: message.type || undefined,  // 新增：支持消息类型
-        expandable: message.expandable || false  // 新增：支持可展开
+        timestamp: newMessage.timestamp
       }
     }
 

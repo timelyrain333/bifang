@@ -28,7 +28,7 @@
             <div
               v-for="(msg, index) in chatStore.messages"
               :key="msg.id || index"
-              :class="['message', msg.role, { 'message-thinking': msg.type === 'thinking', 'message-final': msg.type === 'final' }]"
+              :class="['message', msg.role]"
             >
               <div class="message-header">
                 <span class="role-name">
@@ -36,12 +36,8 @@
                 </span>
                 <span class="message-time">{{ formatTime(msg.timestamp) }}</span>
               </div>
-              <div
-                :class="['message-content', { 'streaming': msg.isStreaming, 'content-thinking': msg.type === 'thinking', 'content-final': msg.type === 'final' }]"
-              >
-                <div v-if="msg.type === 'thinking'" class="thinking-expand" @click="toggleThinkingExpand(msg)">
-                </div>
-                <div v-html="formatMessage(msg.content)"></div>
+              <div :class="['message-content', { 'streaming': msg.isStreaming }]">
+                <div v-html="formatMessage(msg.content || '')"></div>
               </div>
             </div>
           </TransitionGroup>
@@ -101,15 +97,14 @@
               <span>Ctrl + Enter 发送</span>
             </div>
             <el-button
-              type="primary"
               @click="sendMessage"
               :loading="chatStore.isLoading"
               :disabled="!inputMessage.trim() || chatStore.isLoading"
-              circle
-              size="large"
+              size="default"
               class="send-button"
             >
-              <el-icon v-if="!chatStore.isLoading"><Promotion /></el-icon>
+              <el-icon v-if="!chatStore.isLoading" class="send-icon"><Promotion /></el-icon>
+              <span v-else class="loading-text">发送中</span>
             </el-button>
           </div>
         </div>
@@ -119,8 +114,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, onUnmounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ElMessage } from 'element-plus'
 import { Promotion } from '@element-plus/icons-vue'
 import { secopsAgentApi } from '../api/secopsAgent'
 import { useChatStore } from '../stores/chat'
@@ -162,35 +157,35 @@ const formatMessage = (content) => {
     .replace(/>/g, '&gt;')
 
   // Markdown 基本语法
-    .replace(/\n/g, '<br>')
+  .replace(/\n/g, '<br>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/`(.+?)`/g, '<code>$1</code>')
     .replace(/~~(.+?)~~/g, '<del>$1</del>')
 
   // 表情符号颜色
-    .replace(/✅/g, '<span class="emoji-success">✅</span>')
-    .replace(/❌/g, '<span class="emoji-error">❌</span>')
+  .replace(/✅/g, '<span class="emoji-success">✅</span>')
+  .replace(/❌/g, '<span class="emoji-error">❌</span>')
     .replace(/⚠️/g, '<span class="emoji-warning">⚠️</span>')
     .replace(/ℹ️/g, '<span class="emoji-info">ℹ️</span>')
 
   // 代码块
-    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="language-$1">$2</code></pre>')
+  .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="language-$1">$2</code></pre>')
 
   // 报告下载按钮
-    .replace(
+  .replace(
       /\[点击下载 HTML 报告\]\((\/api\/reports\/hexstrike\/[^)]+)\)/g,
       '<div class="report-download"><el-button type="primary" size="small" onclick="window.open(\'$1\', \'_blank\')">📄 下载完整 HTML 报告</el-button></div>'
     )
 
   // 普通链接
-    .replace(
-      /\[([^\]]+)\]\(([^)]+)\)/g,
+  .replace(
+      /\[([^\]]+)\]\((\/api\/[^)]+)\)/g,
       '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
     )
 
   // URL 自动链接
-    .replace(
+  .replace(
       /(https?:\/\/[^\s<]+)/g,
       '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
     )
@@ -198,7 +193,7 @@ const formatMessage = (content) => {
   return html
 }
 
-// 滚动处理
+// 自动滚动
 const handleScroll = () => {
   if (!chatContainerRef.value) return
   const container = chatContainerRef.value
@@ -210,7 +205,7 @@ const handleScroll = () => {
 // 自动滚动到底部
 const scrollToBottom = (force = false) => {
   if (!chatContainerRef.value) return
-  if (!force && userScrolled.value) return
+  if (force && userScrolled.value) return
 
   nextTick(() => {
     if (chatContainerRef.value) {
@@ -222,20 +217,6 @@ const scrollToBottom = (force = false) => {
   })
 }
 
-// 处理输入
-const handleInput = () => {
-  // 自动调整文本框高度
-  const lines = inputMessage.value.split('\n').length
-  inputRows.value = Math.min(Math.max(lines, 3), 10)
-}
-
-// 切换思考过程展开状态
-const toggleThinkingExpand = (msg) => {
-  if (msg.expandable !== undefined) {
-    msg.expandable = !msg.expandable
-  }
-}
-
 // 使用建议
 const useSuggestion = (text) => {
   inputMessage.value = text
@@ -243,7 +224,6 @@ const useSuggestion = (text) => {
 }
 
 // 发送消息
-const sendMessage = async () => {
 const sendMessage = async () => {
   const message = inputMessage.value.trim()
   if (!message || chatStore.isLoading) return
@@ -262,19 +242,18 @@ const sendMessage = async () => {
   // 清空输入框
   inputMessage.value = ''
   inputRows.value = 3
-  chatStore.setLoading(true)
 
   // 创建助手思考过程消息占位（不保存到数据库）
   chatStore.addMessage({
     role: 'assistant',
-    type: 'thinking',  // 新增：消息类型
+    type: 'thinking',
     content: '正在思考...',
     timestamp: new Date(),
     isStreaming: true
   }, false)
 
   scrollToBottom(true)
-}
+  chatStore.setLoading(true)
 
   try {
     // 构建对话历史（排除当前正在流式输出的消息）
@@ -289,10 +268,7 @@ const sendMessage = async () => {
     // 调用流式 API
     const response = await secopsAgentApi.chat(message, history)
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
-    }
-
+    // 创建读取器
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -329,34 +305,29 @@ const sendMessage = async () => {
               // 流式结束，保存消息到数据库
               await chatStore.syncLastMessage()
               chatStore.setMessageStreaming(false)
-            } else if (data.content !== undefined) {
-              // 处理内容（可能是 JSON 对象或普通文本）
-              const currentContent = chatStore.messages[chatStore.messages.length - 1].content
-
-              if (data.type === 'thinking') {
-                // 思考过程消息（灰色，可展开）
-                chatStore.addMessage({
-                  role: 'assistant',
-                  type: 'thinking',
-                  content: data.content || '正在思考...',
-                  timestamp: new Date(),
-                  isStreaming: false,
-                  expandable: true
-                }, false)
-              } else if (typeof data.content === 'string') {
-                // 普通文本内容（可能是思考过程的一部分）
-                chatStore.updateLastMessage(currentContent + data.content)
-                scrollToBottom()
-              } else if (data.content && data.content.content) {
-                // JSON 格式的最终答复内容
-                await chatStore.addMessage({
-                  role: 'assistant',
-                  type: 'final',
-                  content: data.content.content,
-                  timestamp: new Date(),
-                  isStreaming: false
-                }, false)
-              }
+            } else if (data.type === 'thinking') {
+              // 思考过程消息（灰色，可展开）
+              chatStore.addMessage({
+                role: 'assistant',
+                type: 'thinking',
+                content: data.content || '正在思考...',
+                timestamp: new Date(),
+                isStreaming: false,
+                expandable: true
+              }, false)
+            } else if (data.type === 'final' && data.content) {
+              // 最终答复内容（黑色，追加到当前 final 消息）
+              chatStore.updateLastMessage(
+                chatStore.messages[chatStore.messages.length - 1].content + data.content
+              )
+              scrollToBottom()
+            } else if (data.content) {
+              // 兼容旧格式：普通文本内容（追加到最后一条消息）
+              chatStore.updateLastMessage(
+                chatStore.messages[chatStore.messages.length - 1].content + data.content
+              )
+              scrollToBottom()
+            }
           } catch (e) {
             console.error('解析SSE失败:', e, line)
           }
@@ -380,6 +351,8 @@ const sendMessage = async () => {
     // 流式结束，保存消息到数据库
     await chatStore.syncLastMessage()
     chatStore.setMessageStreaming(false)
+    scrollToBottom()
+    chatStore.setLoading(false)
 
   } catch (error) {
     console.error('发送消息失败:', error)
@@ -394,6 +367,25 @@ const sendMessage = async () => {
     scrollToBottom()
   }
 }
+
+// 处理输入
+const handleInput = () => {
+  // 自动调整文本框高度
+  const lines = inputMessage.value.split('\n').length
+  inputRows.value = Math.min(Math.max(lines, 3), 10)
+}
+
+// 聚焦输入框
+nextTick(() => {
+  if (inputRef.value) {
+    inputRef.value.focus()
+  }
+})
+
+// 组件卸载时的清理工作（如有需要）
+onUnmounted(() => {
+  console.log('SecOps Agent 组件已卸载')
+})
 
 onMounted(async () => {
   // 初始化聊天 store（加载会话列表和消息）
@@ -412,29 +404,23 @@ onMounted(async () => {
     })
   })
 
-  // 聚焦输入框
+  // 自动聚焦输入框
   nextTick(() => {
     if (inputRef.value) {
       inputRef.value.focus()
     }
   })
-
-  // 滚动到底部显示最新消息
-  scrollToBottom(true)
-})
-
-onUnmounted(() => {
-  // 组件卸载时的清理工作（如有需要）
-  console.log('SecOps Agent 组件已卸载')
 })
 </script>
 
 <style scoped>
+/* Open WebUI 风格设计 */
 .secops-agent {
-  padding: 20px;
-  height: calc(100vh - 100px);
+  padding: 0;
+  height: 100vh;
   display: flex;
   flex-direction: column;
+  background: #f7f7f8;
 }
 
 .agent-card {
@@ -442,59 +428,60 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 12px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-}
-
-:deep(.el-card__header) {
-  padding: 16px 20px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 0;
+  box-shadow: none;
   border: none;
+  background: transparent;
 }
 
-:deep(.el-card__body) {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
+/* 覆盖 el-card 默认样式 */
+.agent-card :deep(.el-card__header) {
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff;
+  padding: 12px 16px;
+}
+
+.agent-card :deep(.el-card__body) {
   padding: 0;
-  overflow: hidden;
+  background: #ffffff;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  width: 100%;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .title {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
-  color: white;
+  color: #111827;
 }
 
 .header-right {
   display: flex;
+  align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .chat-container {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
-  background: linear-gradient(180deg, #f8f9fa 0%, #ffffff 100%);
+  padding: 20px;
+  background: #ffffff;
   scroll-behavior: smooth;
   position: relative;
 }
 
 .chat-container::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
 }
 
 .chat-container::-webkit-scrollbar-track {
@@ -502,31 +489,33 @@ onUnmounted(() => {
 }
 
 .chat-container::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
 
 .chat-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.25);
+  background: rgba(0, 0, 0, 0.2);
+  background-clip: content-box;
 }
 
 .messages {
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  max-width: 900px;
+  gap: 16px;
+  max-width: 800px;
   margin: 0 auto;
-  padding-bottom: 60px;
+  padding-bottom: 80px;
 }
 
-/* 消息动画 */
 .message-fade-enter-active {
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .message-fade-enter-from {
   opacity: 0;
-  transform: translateY(20px);
+  transform: translateY(10px);
 }
 
 .message-fade-enter-to {
@@ -534,77 +523,69 @@ onUnmounted(() => {
   transform: translateY(0);
 }
 
-.message {
-  animation: messageSlideIn 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-@keyframes messageSlideIn {
-  from {
-    opacity: 0;
-    transform: translateY(20px) scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
 .message.user {
   align-self: flex-end;
+  max-width: 80%;
 }
 
 .message.assistant {
   align-self: flex-start;
+  max-width: 85%;
 }
 
 .message-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
-  font-size: 12px;
-  color: #909399;
+  margin-bottom: 6px;
+  font-size: 13px;
   padding: 0 4px;
 }
 
 .role-name {
-  font-weight: 500;
+  font-weight: 600;
+  color: #374151;
+}
+
+.message-time {
+  font-size: 12px;
+  color: #9ca3af;
 }
 
 .message-content {
-  padding: 14px 18px;
-  border-radius: 16px;
-  line-height: 1.7;
+  padding: 12px 16px;
+  border-radius: 12px;
+  line-height: 1.6;
   word-wrap: break-word;
   position: relative;
-  transition: all 0.3s ease;
+  font-size: 14px;
 }
 
+/* 用户消息样式 */
 .message.user .message-content {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: #f3f4f6;
+  color: #1f2937;
   border-bottom-right-radius: 4px;
-  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+  border: 1px solid #e5e7eb;
 }
 
+/* AI 消息样式 */
 .message.assistant .message-content {
-  background: white;
-  color: #303133;
-  border: 1px solid #e4e7ed;
+  background: #f3f4f6;
+  color: #1f2937;
   border-bottom-left-radius: 4px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  border: 1px solid #e5e7eb;
 }
 
-/* 流式输出时的光标效果 */
-.message.assistant .message-content.streaming::after {
+.message-content.streaming::after {
   content: '';
   display: inline-block;
-  width: 8px;
-  height: 18px;
+  width: 6px;
+  height: 16px;
   margin-left: 4px;
   vertical-align: middle;
   animation: blink 1s infinite;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: #1f2937;
   border-radius: 2px;
 }
 
@@ -613,99 +594,109 @@ onUnmounted(() => {
   50%, 100% { opacity: 0; }
 }
 
-.message.assistant .message-content :deep(code) {
-  background: #f5f7fa;
-  padding: 3px 8px;
+/* Markdown 样式优化 */
+.message-content :deep(code) {
+  background: rgba(0, 0, 0, 0.08);
+  padding: 2px 6px;
   border-radius: 4px;
-  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
-  font-size: 0.9em;
-  color: #e83e8c;
-  border: 1px solid #e4e7ed;
+  font-size: 13px;
+  font-family: 'Monaco', 'Menlo', monospace;
+  color: #1f2937;
 }
 
-.message.assistant .message-content :deep(pre) {
-  background: #282c34;
-  color: #abb2bf;
+.message-content :deep(pre) {
+  background: #1f2937;
+  color: #f9fafb;
   padding: 16px;
   border-radius: 8px;
   overflow-x: auto;
   margin: 12px 0;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border: 1px solid #e5e7eb;
 }
 
-.message.assistant .message-content :deep(pre code) {
+.message-content :deep(pre code) {
   background: transparent;
   padding: 0;
-  border: none;
   color: inherit;
 }
 
-.message.assistant .message-content :deep(a) {
-  color: #409eff;
+.message-content :deep(a) {
+  color: #10a37f;
   text-decoration: none;
-  border-bottom: 1px dashed #409eff;
-  transition: all 0.2s;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s;
 }
 
-.message.assistant .message-content :deep(a:hover) {
-  color: #66b1ff;
-  border-bottom-style: solid;
+.message-content :deep(a:hover) {
+  border-bottom-color: #10a37f;
 }
 
-.emoji-success { color: #67c23a; }
-.emoji-error { color: #f56c6c; }
-.emoji-warning { color: #e6a23c; }
-.emoji-info { color: #909399; }
+.message.user .message-content :deep(a) {
+  color: #1f2937;
+  text-decoration: underline;
+  font-weight: 500;
+}
 
-.report-download {
-  margin-top: 16px;
-  padding: 12px;
-  background: #f0f9ff;
-  border-radius: 8px;
-  border-left: 3px solid #409eff;
+/* 用户消息中的代码块 */
+.message.user .message-content :deep(pre) {
+  background: #1f2937;
+  color: #f9fafb;
+  border: 1px solid #d1d5db;
+}
+
+/* 表情符号颜色 */
+.message-content :deep(.emoji-success) {
+  color: #10b981;
+}
+
+.message-content :deep(.emoji-error) {
+  color: #ef4444;
+}
+
+.message-content :deep(.emoji-warning) {
+  color: #f59e0b;
+}
+
+.message-content :deep(.emoji-info) {
+  color: #3b82f6;
 }
 
 .empty-state {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
   align-items: center;
-  height: 100%;
+  justify-content: center;
   min-height: 400px;
-}
-
-.empty-content {
+  padding: 40px 20px;
   text-align: center;
-  max-width: 600px;
 }
 
 .empty-icon {
-  font-size: 72px;
-  margin-bottom: 20px;
-  animation: float 3s ease-in-out infinite;
-}
-
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-15px); }
+  font-size: 64px;
+  margin-bottom: 24px;
+  opacity: 0.8;
 }
 
 .empty-content h3 {
-  font-size: 24px;
-  color: #303133;
-  margin-bottom: 12px;
+  margin: 0 0 8px 0;
+  font-size: 20px;
+  color: #111827;
+  font-weight: 600;
 }
 
-.empty-content > p {
-  color: #909399;
+.empty-content p {
+  margin: 0;
   font-size: 14px;
-  margin-bottom: 32px;
+  color: #6b7280;
 }
 
 .suggestions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, 1fr);
   gap: 12px;
-  margin-top: 24px;
+  margin-top: 32px;
+  width: 100%;
+  max-width: 600px;
 }
 
 .suggestion-card {
@@ -713,18 +704,18 @@ onUnmounted(() => {
   align-items: center;
   gap: 12px;
   padding: 16px;
-  background: white;
-  border: 1px solid #e4e7ed;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 12px;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s ease;
+  text-align: left;
 }
 
 .suggestion-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(102, 126, 234, 0.2);
-  border-color: #667eea;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  border-color: #10a37f;
 }
 
 .suggestion-icon {
@@ -733,35 +724,27 @@ onUnmounted(() => {
 }
 
 .suggestion-text {
+  font-size: 13px;
+  color: #374151;
+  font-weight: 500;
   flex: 1;
-  font-size: 14px;
-  color: #606266;
-  text-align: left;
 }
 
 .suggestion-arrow {
-  font-size: 18px;
-  color: #667eea;
-  opacity: 0;
-  transform: translateX(-8px);
-  transition: all 0.3s;
-}
-
-.suggestion-card:hover .suggestion-arrow {
-  opacity: 1;
-  transform: translateX(0);
+  font-size: 14px;
+  color: #9ca3af;
+  flex-shrink: 0;
 }
 
 .thinking-indicator {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 16px 24px;
-  background: white;
+  padding: 16px 20px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
   border-radius: 12px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
-  max-width: 200px;
-  margin: 0 auto;
+  max-width: fit-content;
 }
 
 .thinking-dots {
@@ -770,85 +753,100 @@ onUnmounted(() => {
 }
 
 .dot {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  animation: dotPulse 1.4s infinite ease-in-out;
+  background: #10a37f;
 }
 
-.dot:nth-child(1) { animation-delay: 0s; }
-.dot:nth-child(2) { animation-delay: 0.2s; }
-.dot:nth-child(3) { animation-delay: 0.4s; }
+.dot:nth-child(1) {
+  animation: pulse 1.4s infinite ease-in-out;
+}
 
-@keyframes dotPulse {
-  0%, 80%, 100% {
-    transform: scale(0.6);
-    opacity: 0.5;
+.dot:nth-child(2) {
+  animation: pulse 1.4s infinite ease-in-out 0.16s;
+}
+
+.dot:nth-child(3) {
+  animation: pulse 1.4s infinite ease-in-out 0.32s;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.4;
+    transform: scale(0.8);
   }
-  40% {
-    transform: scale(1);
+  50% {
     opacity: 1;
+    transform: scale(1);
   }
 }
 
 .thinking-text {
-  font-size: 14px;
-  color: #909399;
+  font-size: 13px;
+  color: #6b7280;
   font-weight: 500;
 }
 
-.clear-history-wrapper {
-  position: absolute;
-  top: 20px;
-  right: 20px;
-  z-index: 10;
-}
-
-.clear-history-btn {
-  opacity: 0.6;
-  transition: all 0.3s;
-}
-
-.clear-history-btn:hover {
-  opacity: 1;
-}
-
-/* 淡入淡出动画 */
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.3s;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-
 .input-area {
-  border-top: 1px solid #e4e7ed;
-  padding: 20px 24px;
-  background: white;
+  border-top: 1px solid #e5e7eb;
+  padding: 16px 20px;
+  background: #ffffff;
 }
 
 .input-wrapper {
-  max-width: 900px;
+  max-width: 800px;
   margin: 0 auto;
 }
 
-.message-input :deep(textarea) {
-  border-radius: 12px;
-  border: 2px solid #e4e7ed;
-  padding: 14px 16px;
-  font-size: 14px;
-  line-height: 1.6;
-  transition: all 0.3s;
-  resize: none;
+.message-input {
+  width: 100%;
 }
 
-.message-input :deep(textarea):focus {
-  border-color: #667eea;
-  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+/* 覆盖 el-input 样式 */
+.message-input :deep(.el-textarea__inner) {
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  padding: 12px 16px;
+  font-size: 14px;
+  line-height: 1.6;
+  transition: all 0.2s;
+}
+
+.message-input :deep(.el-textarea__inner):focus {
+  border-color: #374151;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.1);
+}
+
+/* 覆盖 el-tag 样式 */
+.header-right :deep(.el-tag) {
+  border-radius: 6px;
+  border: none;
+  font-weight: 500;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.header-right :deep(.el-tag--success) {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.header-right :deep(.el-tag--warning) {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.header-right :deep(.el-tag--info) {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.input-hint {
+  font-size: 12px;
+  color: #9ca3af;
 }
 
 .input-actions {
@@ -858,41 +856,51 @@ onUnmounted(() => {
   margin-top: 12px;
 }
 
-.input-hint {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #909399;
-}
-
-.hint-icon {
-  font-size: 16px;
-}
-
 .send-button {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  min-width: 100px;
+  background: #1f2937;
+  color: #ffffff;
   border: none;
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-  transition: all 0.3s;
+  font-weight: 500;
+  padding: 10px 20px;
+  border-radius: 8px;
+  transition: all 0.2s;
 }
 
-.send-button:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+.send-button:hover:not(:disabled) {
+  background: #111827;
+  transform: translateY(-1px);
 }
 
-.send-button:active {
-  transform: translateY(0);
+.send-button:disabled {
+  background: #d1d5db;
+  color: #9ca3af;
+  cursor: not-allowed;
 }
 
+.send-icon {
+  font-size: 16px;
+  color: #ffffff;
+}
+
+.loading-text {
+  font-size: 13px;
+  color: #ffffff;
+}
+
+/* 移动端适配 */
 @media (max-width: 768px) {
   .suggestions {
     grid-template-columns: 1fr;
   }
 
-  .message-content {
-    padding: 12px 14px;
+  .message.user,
+  .message.assistant {
+    max-width: 90%;
+  }
+
+  .card-header {
+    padding: 10px 12px;
   }
 
   .chat-container {

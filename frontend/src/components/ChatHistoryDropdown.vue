@@ -221,37 +221,39 @@ const formatTime = (timestamp) => {
 .session-selector {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  background: #f5f7fa;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #f3f4f6;
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.3s;
+  transition: all 0.2s;
   user-select: none;
+  border: 1px solid transparent;
 }
 
 .session-selector:hover {
-  background: #e6f7ff;
+  background: #e5e7eb;
+  border-color: #d1d5db;
 }
 
 .selector-icon {
-  font-size: 18px;
-  color: #409eff;
+  font-size: 16px;
+  color: #10a37f;
 }
 
 .session-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
-  color: #303133;
-  max-width: 200px;
+  color: #1f2937;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .dropdown-icon {
-  font-size: 14px;
-  color: #909399;
+  font-size: 12px;
+  color: #6b7280;
 }
 
 .session-item {
@@ -259,8 +261,8 @@ const formatTime = (timestamp) => {
   justify-content: space-between;
   align-items: center;
   width: 100%;
-  min-width: 320px;
-  max-width: 480px;
+  min-width: 300px;
+  max-width: 450px;
   padding: 0;
 }
 
@@ -273,17 +275,18 @@ const formatTime = (timestamp) => {
 }
 
 .check-icon {
-  font-size: 16px;
-  color: #67c23a;
+  font-size: 14px;
+  color: #10a37f;
   flex-shrink: 0;
 }
 
 .session-title-text {
-  font-size: 14px;
-  color: #303133;
+  font-size: 13px;
+  color: #1f2937;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 500;
 }
 
 .session-meta {
@@ -291,27 +294,28 @@ const formatTime = (timestamp) => {
   flex-direction: column;
   align-items: flex-end;
   gap: 2px;
-  font-size: 12px;
-  color: #909399;
+  font-size: 11px;
+  color: #9ca3af;
   margin-right: 8px;
 }
 
 .message-count {
-  background: #f0f9ff;
-  color: #409eff;
-  padding: 2px 8px;
+  background: #f3f4f6;
+  color: #6b7280;
+  padding: 2px 6px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 500;
 }
 
 .update-time {
-  color: #909399;
-  font-size: 11px;
+  color: #9ca3af;
+  font-size: 10px;
 }
 
 .more-icon {
-  font-size: 16px;
-  color: #909399;
+  font-size: 14px;
+  color: #9ca3af;
   cursor: pointer;
   padding: 4px;
   border-radius: 4px;
@@ -319,18 +323,18 @@ const formatTime = (timestamp) => {
 }
 
 .more-icon:hover {
-  color: #409eff;
-  background: #f0f9ff;
+  color: #10a37f;
+  background: #f3f4f6;
 }
 
 .is-active {
-  background: #f0f9ff;
+  background: #f0fdf4;
 }
 
 .empty-text {
-  color: #909399;
-  font-size: 14px;
+  color: #9ca3af;
+  font-size: 13px;
   text-align: center;
-  padding: 20px;
+  padding: 24px 16px;
 }
 </style>

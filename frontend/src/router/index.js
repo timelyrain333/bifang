@@ -6,6 +6,7 @@ import TaskList from '../views/TaskList.vue'
 import TaskForm from '../views/TaskForm.vue'
 import PluginList from '../views/PluginList.vue'
 import AssetList from '../views/AssetList.vue'
+import CloudServer from '../views/CloudServer.vue'
 import VulnerabilityList from '../views/VulnerabilityList.vue'
 import SystemConfig from '../views/SystemConfig.vue'
 import AliyunConfig from '../views/AliyunConfig.vue'
@@ -53,19 +54,19 @@ const routes = [
   },
   {
     path: '/assets',
-    redirect: '/assets/aliyun'
+    redirect: '/assets/fingerprints'
   },
   {
-    path: '/assets/aws',
-    name: 'AssetListAWS',
+    path: '/assets/fingerprints',
+    name: 'AssetFingerprints',
     component: AssetList,
-    meta: { requiresAuth: true, source: 'aws_inspector', title: 'AWS 资产' }
+    meta: { requiresAuth: true, title: '主机指纹' }
   },
   {
-    path: '/assets/aliyun',
-    name: 'AssetListAliyun',
-    component: AssetList,
-    meta: { requiresAuth: true, source: 'aliyun_security', title: '阿里云资产' }
+    path: '/assets/cloud-servers',
+    name: 'CloudServer',
+    component: CloudServer,
+    meta: { requiresAuth: true, title: '云服务器' }
   },
   {
     path: '/vulnerabilities',
