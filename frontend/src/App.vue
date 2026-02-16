@@ -52,6 +52,22 @@
                 <el-icon style="opacity: 0"><List /></el-icon>
                 <span>云服务器</span>
               </el-menu-item>
+              <el-menu-item index="/assets/vpc-network">
+                <el-icon style="opacity: 0"><List /></el-icon>
+                <span>专有网络VPC</span>
+              </el-menu-item>
+              <el-menu-item index="/assets/load-balancer">
+                <el-icon style="opacity: 0"><List /></el-icon>
+                <span>负载均衡</span>
+              </el-menu-item>
+              <el-menu-item index="/assets/cloud-database">
+                <el-icon style="opacity: 0"><List /></el-icon>
+                <span>云数据库</span>
+              </el-menu-item>
+              <el-menu-item index="/assets/domain-dns">
+                <el-icon style="opacity: 0"><List /></el-icon>
+                <span>域名解析</span>
+              </el-menu-item>
             </el-sub-menu>
             <el-sub-menu index="vulnerability">
               <template #title>

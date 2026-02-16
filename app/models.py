@@ -122,6 +122,12 @@ class Asset(models.Model):
         ('kernel_module', '内核模块'),
         ('web_site', 'Web站点'),
         ('idc_probe', 'IDC探针发现'),
+        ('vpc', 'VPC实例'),
+        ('vswitch', '交换机'),
+        ('route_table', '路由表'),
+        ('nat_gateway', 'NAT网关'),
+        ('ipv4_gateway', 'IPv4网关'),
+        ('vpc_peer_connection', 'VPC对等连接'),
     ]
 
     asset_type = models.CharField(max_length=50, choices=ASSET_TYPE_CHOICES, verbose_name='资产类型')

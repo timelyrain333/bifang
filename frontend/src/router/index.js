@@ -7,6 +7,10 @@ import TaskForm from '../views/TaskForm.vue'
 import PluginList from '../views/PluginList.vue'
 import AssetList from '../views/AssetList.vue'
 import CloudServer from '../views/CloudServer.vue'
+import VPCNetwork from '../views/VPCNetwork.vue'
+import LoadBalancer from '../views/LoadBalancer.vue'
+import CloudDatabase from '../views/CloudDatabase.vue'
+import DomainDNS from '../views/DomainDNS.vue'
 import VulnerabilityList from '../views/VulnerabilityList.vue'
 import SystemConfig from '../views/SystemConfig.vue'
 import AliyunConfig from '../views/AliyunConfig.vue'
@@ -67,6 +71,30 @@ const routes = [
     name: 'CloudServer',
     component: CloudServer,
     meta: { requiresAuth: true, title: '云服务器' }
+  },
+  {
+    path: '/assets/vpc-network',
+    name: 'VPCNetwork',
+    component: VPCNetwork,
+    meta: { requiresAuth: true, title: 'VPC专有网络' }
+  },
+  {
+    path: '/assets/load-balancer',
+    name: 'LoadBalancer',
+    component: LoadBalancer,
+    meta: { requiresAuth: true, title: '负载均衡' }
+  },
+  {
+    path: '/assets/cloud-database',
+    name: 'CloudDatabase',
+    component: CloudDatabase,
+    meta: { requiresAuth: true, title: '云数据库' }
+  },
+  {
+    path: '/assets/domain-dns',
+    name: 'DomainDNS',
+    component: DomainDNS,
+    meta: { requiresAuth: true, title: '域名解析' }
   },
   {
     path: '/vulnerabilities',

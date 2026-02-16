@@ -348,23 +348,40 @@ def execute_task_async(task_id, execution_id, bind_obj=None):
             # 注意：Celery已经有软超时和硬超时配置，这里主要是记录日志
             logger.info(f'开始执行插件: {task.plugin.name} (任务ID: {task.id}, 执行ID: {execution.id})')
             result = plugin_instance.execute()
+
+            # 获取插件日志
+            if hasattr(plugin_instance, '_get_logs'):
+                try:
+                    logs = plugin_instance._get_logs()
+                    if not isinstance(result, dict):
+                        result = {'success': True, 'message': '执行完成', 'data': result}
+                    result['logs'] = logs
+                    logger.info(f'已捕获插件日志: {len(logs)} 字符')
+                except Exception as log_error:
+                    logger.warning(f'获取插件日志失败: {str(log_error)}')
+
             logger.info(f'插件执行完成: {task.plugin.name} (任务ID: {task.id}, 执行ID: {execution.id})')
         except Exception as plugin_error:
             # 插件执行异常，记录详细错误信息
             error_msg = f'插件执行异常: {str(plugin_error)}'
             logger.error(f'{error_msg} (任务ID: {task.id}, 执行ID: {execution.id})', exc_info=True)
+
+            # 尝试获取日志
+            logs = ''
+            if hasattr(plugin_instance, '_get_logs'):
+                try:
+                    logs = plugin_instance._get_logs()
+                    logger.info(f'已捕获异常插件日志: {len(logs)} 字符')
+                except Exception as log_error:
+                    logger.warning(f'获取异常插件日志失败: {str(log_error)}')
+
             # 构造失败结果
             result = {
                 'success': False,
                 'message': error_msg,
                 'data': {},
-                'logs': getattr(plugin_instance, 'log_buffer', None)
+                'logs': logs
             }
-            if hasattr(plugin_instance, 'log_buffer'):
-                try:
-                    result['logs'] = plugin_instance.log_buffer.getvalue()
-                except:
-                    pass
         
         # 更新执行记录
         # 先保存执行用户ID（如果存在）- 需要在更新result之前读取
