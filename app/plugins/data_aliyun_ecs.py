@@ -171,7 +171,8 @@ class Plugin(BasePlugin):
         request = request_class()
         for key, value in params.items():
             if value is not None:
-                setattr(request, key, value)
+                # 使用 add_query_param 方法正确添加参数
+                request.add_query_param(key, value)
 
         try:
             response = self.client.do_action_with_exception(request)
@@ -186,6 +187,9 @@ class Plugin(BasePlugin):
 
     def import_instances(self):
         """导入ECS实例"""
+        from django.apps import apps
+        Asset = apps.get_model('app', 'Asset')
+
         # 分页查询参数
         params = {
             'PageSize': 100,
@@ -194,6 +198,7 @@ class Plugin(BasePlugin):
 
         total_count = 0
         page_number = 1
+        cloud_uuids = set()  # 收集云上所有实例的UUID
 
         while True:
             params['PageNumber'] = page_number
@@ -204,10 +209,13 @@ class Plugin(BasePlugin):
                 break
 
             for instance in instances:
+                instance_id = instance.get('InstanceId')
+                cloud_uuids.add(instance_id)
+
                 try:
                     # 构造资产数据
                     asset_data = {
-                        'InstanceId': instance.get('InstanceId'),
+                        'InstanceId': instance_id,
                         'InstanceName': instance.get('InstanceName'),
                         'Status': instance.get('Status'),
                         'InstanceType': instance.get('InstanceType'),
@@ -234,8 +242,8 @@ class Plugin(BasePlugin):
                     # 保存到数据库
                     self.db_helper.save_asset(
                         asset_type='ecs_instance',
-                        uuid=instance.get('InstanceId'),
-                        name=instance.get('InstanceName', instance.get('InstanceId')),
+                        uuid=instance_id,
+                        name=instance.get('InstanceName', instance_id),
                         source='aliyun_ecs',
                         data=asset_data,
                         host_uuid=None
@@ -244,7 +252,7 @@ class Plugin(BasePlugin):
                     total_count += 1
 
                 except Exception as e:
-                    self.log_error(f"保存实例 {instance.get('InstanceId')} 失败: {str(e)}")
+                    self.log_error(f"保存实例 {instance_id} 失败: {str(e)}")
                     continue
 
             # 检查是否还有下一页
@@ -253,6 +261,16 @@ class Plugin(BasePlugin):
                 break
 
             page_number += 1
+
+        # 清理云上已不存在的实例（删除已释放的ECS记录）
+        if cloud_uuids:
+            deleted_count, _ = Asset.objects.filter(
+                asset_type='ecs_instance',
+                source='aliyun_ecs'
+            ).exclude(uuid__in=cloud_uuids).delete()
+
+            if deleted_count > 0:
+                self.log_info(f"清理了 {deleted_count} 条已释放的ECS实例记录")
 
         return total_count
 

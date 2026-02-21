@@ -9,7 +9,7 @@ import json
 class Plugin(models.Model):
     """插件模型"""
     name = models.CharField(max_length=100, unique=True, verbose_name='插件名称')
-    plugin_type = models.CharField(max_length=50, verbose_name='插件类型', 
+    plugin_type = models.CharField(max_length=50, verbose_name='插件类型',
                                    choices=[
                                        ('data', '数据记录类'),
                                        ('collect', '数据采集类'),
@@ -470,3 +470,100 @@ class ChatMessage(models.Model):
     def __str__(self):
         content_preview = self.content[:50]
         return f"{self.role}: {content_preview}"
+
+
+class AssetSnapshot(models.Model):
+    """资产快照模型 - 记录每次采集的资产列表"""
+    SNAPSHOT_TYPE_CHOICES = [
+        ('ecs_instance', 'ECS实例'),
+        ('ecs_image', '镜像'),
+        ('ecs_disk', '磁盘'),
+        ('ecs_security_group', '安全组'),
+        ('vpc', 'VPC实例'),
+        ('vswitch', '交换机'),
+        ('route_table', '路由表'),
+        ('nat_gateway', 'NAT网关'),
+        ('slb_instance', '负载均衡实例'),
+        ('rds_instance', 'RDS实例'),
+        ('domain', '域名'),
+    ]
+
+    snapshot_id = models.CharField(max_length=50, unique=True, verbose_name='快照ID',
+                                   help_text='格式: {asset_type}_{timestamp}')
+    asset_type = models.CharField(max_length=50, verbose_name='资产类型')
+    source = models.CharField(max_length=50, default='aliyun_ecs', verbose_name='数据来源')
+
+    # 资产UUID列表（JSON格式存储）
+    asset_uuids = models.JSONField(default=list, verbose_name='资产UUID列表')
+    asset_count = models.IntegerField(default=0, verbose_name='资产数量')
+
+    # 完整资产数据（用于详细对比）
+    asset_details = models.JSONField(default=dict, verbose_name='资产详情映射',
+                                     help_text='UUID -> 资产简要信息的映射')
+
+    # 变化记录
+    changes = models.JSONField(default=dict, verbose_name='变化记录',
+                               help_text='与上次快照对比的变化')
+
+    collected_at = models.DateTimeField(auto_now_add=True, verbose_name='采集时间')
+    created_by = models.CharField(max_length=50, blank=True, verbose_name='创建人')
+
+    # 通知状态
+    notification_sent = models.BooleanField(default=False, verbose_name='已发送通知')
+    notification_sent_at = models.DateTimeField(null=True, blank=True, verbose_name='通知发送时间')
+
+    class Meta:
+        db_table = 'asset_snapshots'
+        verbose_name = '资产快照'
+        verbose_name_plural = '资产快照'
+        ordering = ['-collected_at']
+        indexes = [
+            models.Index(fields=['asset_type', '-collected_at']),
+            models.Index(fields=['source', '-collected_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.asset_type} 快照 - {self.collected_at}'
+
+    @staticmethod
+    def generate_snapshot_id(asset_type: str) -> str:
+        """生成快照ID"""
+        import time
+        return f"{asset_type}_{int(time.time() * 1000)}"
+
+
+class AssetChangeRecord(models.Model):
+    """资产变更记录模型 - 记录每次检测到的变化"""
+    CHANGE_TYPE_CHOICES = [
+        ('created', '新增'),
+        ('deleted', '删除'),
+        ('modified', '变更'),
+    ]
+
+    snapshot = models.ForeignKey(AssetSnapshot, on_delete=models.CASCADE,
+                                 related_name='change_records', verbose_name='关联快照')
+    change_type = models.CharField(max_length=20, choices=CHANGE_TYPE_CHOICES,
+                                   verbose_name='变更类型')
+    asset_type = models.CharField(max_length=50, verbose_name='资产类型')
+    asset_uuid = models.CharField(max_length=100, verbose_name='资产UUID')
+    asset_name = models.CharField(max_length=200, blank=True, verbose_name='资产名称')
+
+    # 变更详情
+    old_value = models.JSONField(default=dict, verbose_name='变更前值')
+    new_value = models.JSONField(default=dict, verbose_name='变更后值')
+
+    detected_at = models.DateTimeField(auto_now_add=True, verbose_name='检测时间')
+    notified = models.BooleanField(default=False, verbose_name='已通知')
+
+    class Meta:
+        db_table = 'asset_change_records'
+        verbose_name = '资产变更记录'
+        verbose_name_plural = '资产变更记录'
+        ordering = ['-detected_at']
+        indexes = [
+            models.Index(fields=['change_type', '-detected_at']),
+            models.Index(fields=['asset_type', 'asset_uuid']),
+        ]
+
+    def __str__(self):
+        return f'{self.get_change_type_display()} - {self.asset_name or self.asset_uuid}'

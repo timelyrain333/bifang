@@ -24,7 +24,7 @@ import threading
 import os
 from datetime import datetime
 from pathlib import Path
-from .models import Plugin, Task, TaskExecution, Asset, AliyunConfig, AWSConfig, Vulnerability, HexStrikeExecution
+from .models import Plugin, Task, TaskExecution, Asset, AliyunConfig, AWSConfig, Vulnerability, HexStrikeExecution, AssetSnapshot, AssetChangeRecord
 from django.db import transaction
 from django.db.models import Q
 from .services.secops_agent import SecOpsAgent
@@ -33,7 +33,8 @@ from django.conf import settings as django_settings
 from .utils.hexstrike_export import HexStrikeReportExporter
 from .serializers import (
     PluginSerializer, TaskSerializer, TaskExecutionSerializer, AssetSerializer,
-    AliyunConfigSerializer, AWSConfigSerializer, VulnerabilitySerializer
+    AliyunConfigSerializer, AWSConfigSerializer, VulnerabilitySerializer,
+    AssetSnapshotSerializer, AssetChangeRecordSerializer
 )
 from .tasks import execute_task_async
 from .pagination import CustomPageNumberPagination
@@ -2256,3 +2257,53 @@ class HexStrikeReportDownloadView(APIView):
                 {'error': f'下载失败: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+
+class AssetSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
+    """资产快照视图集"""
+    permission_classes = [IsAuthenticated]
+    serializer_class = AssetSnapshotSerializer
+    pagination_class = CustomPageNumberPagination
+
+    def get_queryset(self):
+        queryset = AssetSnapshot.objects.all()
+
+        asset_type = self.request.query_params.get("asset_type")
+        source = self.request.query_params.get("source")
+
+        if asset_type:
+            queryset = queryset.filter(asset_type=asset_type)
+        if source:
+            queryset = queryset.filter(source=source)
+
+        return queryset.order_by("-collected_at")
+
+    @action(detail=True, methods=["get"])
+    def changes(self, request, pk=None):
+        """获取快照的变更记录"""
+        snapshot = self.get_object()
+        changes = AssetChangeRecord.objects.filter(snapshot=snapshot)
+        serializer = AssetChangeRecordSerializer(changes, many=True)
+        return Response(serializer.data)
+
+
+class AssetChangeRecordViewSet(viewsets.ReadOnlyModelViewSet):
+    """资产变更记录视图集"""
+    permission_classes = [IsAuthenticated]
+    serializer_class = AssetChangeRecordSerializer
+    pagination_class = CustomPageNumberPagination
+
+    def get_queryset(self):
+        queryset = AssetChangeRecord.objects.all()
+
+        change_type = self.request.query_params.get("change_type")
+        asset_type = self.request.query_params.get("asset_type")
+
+        if change_type:
+            queryset = queryset.filter(change_type=change_type)
+        if asset_type:
+            queryset = queryset.filter(asset_type=asset_type)
+
+        return queryset.order_by("-detected_at")
+

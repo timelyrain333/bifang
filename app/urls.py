@@ -6,7 +6,8 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     PluginViewSet, TaskViewSet, TaskExecutionViewSet, AssetViewSet, VulnerabilityViewSet,
     AliyunConfigViewSet, AWSConfigViewSet, LoginView, LogoutView, CurrentUserView, SecOpsAgentViewSet,
-    DingTalkBotView, FeishuBotView, TaskSSEView, HexStrikeReportDownloadView
+    DingTalkBotView, FeishuBotView, TaskSSEView, HexStrikeReportDownloadView,
+    AssetSnapshotViewSet, AssetChangeRecordViewSet
 )
 from .api.chat_views import ChatSessionViewSet
 
@@ -20,6 +21,8 @@ router.register(r'secops-agent', SecOpsAgentViewSet, basename='secops-agent')
 router.register(r'aliyun-configs', AliyunConfigViewSet, basename='aliyun-config')
 router.register(r'aws-configs', AWSConfigViewSet, basename='aws-config')
 router.register(r'chat/sessions', ChatSessionViewSet, basename='chat-session')
+router.register(r'asset-snapshots', AssetSnapshotViewSet, basename='asset-snapshot')
+router.register(r'asset-change-records', AssetChangeRecordViewSet, basename='asset-change-record')
 
 urlpatterns = [
     path('api/auth/login/', LoginView.as_view(), name='login'),

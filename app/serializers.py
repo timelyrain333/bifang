@@ -2,7 +2,7 @@
 API序列化器
 """
 from rest_framework import serializers
-from .models import Plugin, Task, TaskExecution, Asset, AliyunConfig, AWSConfig, Vulnerability, SecurityAlert, ChatSession, ChatMessage
+from .models import Plugin, Task, TaskExecution, Asset, AliyunConfig, AWSConfig, Vulnerability, SecurityAlert, ChatSession, ChatMessage, AssetSnapshot, AssetChangeRecord
 
 
 class PluginSerializer(serializers.ModelSerializer):
@@ -287,3 +287,33 @@ class ChatSessionSerializer(serializers.ModelSerializer):
     def get_messages_count(self, obj):
         """获取会话的消息总数"""
         return obj.message_count
+
+
+class AssetSnapshotSerializer(serializers.ModelSerializer):
+    """资产快照序列化器"""
+    change_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AssetSnapshot
+        fields = ['id', 'snapshot_id', 'asset_type', 'source', 'asset_uuids', 'asset_count',
+                  'asset_details', 'changes', 'collected_at', 'created_by',
+                  'notification_sent', 'notification_sent_at', 'change_count']
+        read_only_fields = ['snapshot_id', 'collected_at']
+
+    def get_change_count(self, obj):
+        """获取变化数量"""
+        changes = obj.changes or {}
+        return len(changes.get('created', [])) + len(changes.get('deleted', [])) + len(changes.get('modified', []))
+
+
+class AssetChangeRecordSerializer(serializers.ModelSerializer):
+    """资产变更记录序列化器"""
+    snapshot_id = serializers.CharField(source='snapshot.snapshot_id', read_only=True)
+    change_type_display = serializers.CharField(source='get_change_type_display', read_only=True)
+
+    class Meta:
+        model = AssetChangeRecord
+        fields = ['id', 'snapshot', 'snapshot_id', 'change_type', 'change_type_display',
+                  'asset_type', 'asset_uuid', 'asset_name', 'old_value', 'new_value',
+                  'detected_at', 'notified']
+        read_only_fields = ['detected_at']
