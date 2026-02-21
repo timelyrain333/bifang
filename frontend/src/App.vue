@@ -54,7 +54,7 @@
               </el-menu-item>
               <el-menu-item index="/assets/vpc-network">
                 <el-icon style="opacity: 0"><List /></el-icon>
-                <span>专有网络VPC</span>
+                <span>专有网络</span>
               </el-menu-item>
               <el-menu-item index="/assets/load-balancer">
                 <el-icon style="opacity: 0"><List /></el-icon>
